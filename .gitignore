@@ -1,0 +1,25 @@
+# 비밀·환경
+.env
+.venv/
+__pycache__/
+*.pyc
+*.log
+.pytest_cache/
+
+# 런타임 산출물
+session.db
+checkpoints.db
+data/uploads/*
+!data/uploads/.gitkeep
+
+# MVTec AD 이미지 (CC BY-NC-SA — 재배포 금지, 스크립트로 내려받음)
+data/mvtec/*
+!data/mvtec/.gitkeep
+
+# AI 코딩 도구용 지시 파일 (저장소에 포함하지 않음)
+AGENTS.md
+AGENT.md
+CLAUDE.md
+**/_TASK.md
+_tasks/
+_workspace/
