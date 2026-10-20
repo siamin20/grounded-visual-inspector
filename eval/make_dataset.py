@@ -64,7 +64,10 @@ def _expected_download_paths() -> list[Path]:
     for item, labels in ITEM_TYPES.items():
         paths.extend(DATA_ROOT / item / "train" / "good" / f"{index:03d}.png" for index in range(5))
         for label in labels:
-            paths.extend(DATA_ROOT / item / "test" / label / f"{index:03d}.png" for index in range(12))
+            paths.extend(
+                DATA_ROOT / item / "test" / label / f"{index:03d}.png"
+                for index in range(20 if label == "good" else 12)
+            )
     return paths
 
 

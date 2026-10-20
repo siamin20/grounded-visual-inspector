@@ -1,12 +1,13 @@
 """Wave 2 — MCP 서버 여러 개를 subprocess(stdio)로 1회씩 기동해 재사용하는 클라이언트.
 
 Wave 1의 교훈대로 서버(lifespan)에서 한 번만 연결을 만들고 모든 요청이 공유한다.
-Wave 9 데모용으로, 프로세스 최초의 get_monitoring_status 호출 1회는 일부러
+Wave 9 데모용으로, 프로세스 최초의 대상 Tool 호출 1회는 일부러
 asyncio.TimeoutError를 던진다(transient) — with_retry가 backoff 후 복구해야 한다.
 
-연결 대상은 "ops"(mcp_server.py — monitoring tool + runbook resource + prompt, 실제
-사용)와 "docs"(mcp_server_docs.py — API 문서 resource만 제공, agent는 사용하지 않는
-decoy) 두 서버다. resource/prompt를 요청할 때는 어느 서버가 그걸 들고 있는지 미리
+기본 연결 대상은 "vision"(mcp_server_vision.py — 이미지 관찰 tool + 기준서·
+가이드 resource와 검사 prompt, 실제 사용)과 "docs"(mcp_server_docs.py — API
+문서 resource만 제공하는 decoy) 두 서버다. Base ops 서버는 파일로 보존하고 기본
+목록에서만 제외한다. resource/prompt를 요청할 때는 어느 서버가 그걸 들고 있는지 미리
 알고 있지 않다고 가정하고, find_resource_template()/find_prompt()로 연결된 서버들을
 순서대로 조회(list)해 이름이 맞는 걸 찾은 뒤에야 그 서버로 read_resource/get_prompt를
 보낸다.
@@ -24,7 +25,7 @@ from mcp.client.stdio import stdio_client
 
 SERVER_DIR = Path(__file__).parent.parent
 DEFAULT_SERVER_SCRIPTS = {
-    "ops": SERVER_DIR / "mcp_server.py",
+    "vision": SERVER_DIR / "mcp_server_vision.py",
     "docs": SERVER_DIR / "mcp_server_docs.py",
 }
 
@@ -42,9 +43,11 @@ def _attr(obj, *names):
 
 
 class MCPClient:
+    DEFAULT_SERVER_SCRIPTS = DEFAULT_SERVER_SCRIPTS
+
     def __init__(self, flaky_first_tool_call: bool = True,
                  server_scripts: dict[str, Path] | None = None):
-        self._server_scripts = server_scripts or DEFAULT_SERVER_SCRIPTS
+        self._server_scripts = server_scripts or self.DEFAULT_SERVER_SCRIPTS
         self._stack: AsyncExitStack | None = None
         self.sessions: dict[str, ClientSession] = {}
         self._lock = asyncio.Lock()
@@ -68,13 +71,29 @@ class MCPClient:
             self.sessions = {}
 
     @traceable(run_type="tool", name="mcp.call_tool")
-    async def call_tool(self, name: str, arguments: dict, server: str = "ops") -> dict:
-        if self._flaky_pending and name == "get_monitoring_status":
+    async def call_tool(self, name: str, arguments: dict, server: str = "vision") -> dict:
+        if self._flaky_pending and name in {"get_monitoring_status", "inspect_image"}:
             self._flaky_pending = False
             raise asyncio.TimeoutError("simulated transient timeout (Wave 9 demo)")
         async with self._lock:
             result = await self.sessions[server].call_tool(name, arguments)
         return json.loads(result.content[0].text)
+
+    @traceable(run_type="tool", name="mcp.list_tools")
+    async def list_tools(self, server: str) -> list:
+        async with self._lock:
+            result = await self.sessions[server].list_tools()
+        return result.tools
+
+    @traceable(run_type="tool", name="mcp.find_tool")
+    async def find_tool(self, tool_name: str) -> str:
+        """연결된 서버를 순서대로 조회해 Tool 제공 서버를 찾는다."""
+        for server_name in self.sessions:
+            tools = await self.list_tools(server_name)
+            if any(tool.name == tool_name for tool in tools):
+                return server_name
+        raise ValueError(
+            f"MCP tool not found on any connected server: {tool_name}")
 
     @traceable(run_type="tool", name="mcp.list_resource_templates")
     async def list_resource_templates(self, server: str) -> list:
@@ -116,7 +135,7 @@ class MCPClient:
             f"MCP prompt not found on any connected server: {prompt_name}")
 
     @traceable(run_type="tool", name="mcp.get_prompt")
-    async def get_prompt(self, name: str, arguments: dict, server: str = "ops") -> str:
+    async def get_prompt(self, name: str, arguments: dict, server: str = "vision") -> str:
         async with self._lock:
             result = await self.sessions[server].get_prompt(name, arguments)
         return result.messages[0].content.text
