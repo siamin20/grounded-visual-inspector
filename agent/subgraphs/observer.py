@@ -80,6 +80,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
                 "events": [],
                 "retries": 0,
                 "elapsed": 0.0,
+                "tokens": 0,
                 "usd": 0.0,
                 "done_task_indices": [],
             }
@@ -112,6 +113,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
     observations: list[dict] = []
     events: list[dict] = []
     retry_count = 0
+    tokens = 0
     usd = 0.0
     for call in calls:
         region = call["region"]
@@ -138,6 +140,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
             ready_event["filtered_words"] = filtered_words
         events.append(ready_event)
         retry_count += int(call["retries"])
+        tokens += int(result.get("tokens", 0))
         usd += float(result.get("usd", 0.0))
 
     return {
@@ -146,6 +149,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
             "events": events,
             "retries": retry_count,
             "elapsed": elapsed,
+            "tokens": tokens,
             "usd": usd,
             "done_task_indices": task_indices,
         }

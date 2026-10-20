@@ -8,7 +8,7 @@ __pycache__/
 
 # 런타임 산출물
 session.db
-checkpoints.db
+checkpoints.db*
 data/uploads/*
 !data/uploads/.gitkeep
 

@@ -2,7 +2,7 @@
 
 - 작성일: 2026-10-20
 - 범위: Phase 1 데이터·기준서, Phase 2 vision MCP, Phase 3 그래프·RAG 이식,
-  Phase 4 서버·HITL·웹 UI
+  Phase 4 서버·HITL·웹 UI, Phase 5 평가 파이프라인
 - 원칙: 기준서를 작성·검토할 때 테스트 이미지를 열지 않고, MVTec 유형 정의와 일반 품질 기준만 사용했다.
 
 ## 1. Phase 1 최초 구성
@@ -316,4 +316,55 @@ Phase 1 당시 자동 테스트 파일이 아직 없어 `pytest -q`는 `no tests
 - `/inspect`: UUID PNG 저장, 경로 조작·비이미지·10MB 초과 차단 확인.
 - HITL: interactive 중단·승인·반려, auto-approve 무중단, SQLite 재시작 복원 확인.
 - `import agent.graph`, Python compile, Vue 인라인 JavaScript 문법, `git diff --check` 통과.
+- 기준서·가이드는 수정하지 않았고 테스트 이미지를 시각적으로 열지 않았다.
+
+## 9. Phase 5 평가 파이프라인
+
+### fake 결과가 실험 결과와 섞일 위험
+
+- 증상: 서버의 기본 LLM·VLM이 fake이므로, 평가 실행기가 같은 기본값을 쓰면
+  폴더 라벨을 읽는 결정론 결과가 실측처럼 저장될 수 있었다.
+- 왜 문제인가: fake VLM은 파일 경로의 정답 라벨을 사용하므로 정확도 평가에 쓰면
+  결과 조작이다. 로컬 검증 결과가 실제 실험 JSONL과 섞이면 집계도 오염된다.
+- 조치: `eval/run_eval.py`는 `LLM_BACKEND` 또는 `VLM_BACKEND`가 fake이면 즉시
+  종료하고, `--dry-run`을 명시한 경우만 허용했다. dry-run 파일에는
+  `_DRYRUN`을 붙이고 LangSmith 전송을 비활성화했다. Dataset 업로드도
+  `--push-dataset`이 있을 때만 실행한다. 오타난 백엔드가 암묵적으로 fake로
+  떨어지지 않도록 지원 목록 밖의 LLM·VLM 값도 즉시 거부한다.
+- 결과: 허용된 `A/dev/limit 5` dry-run은
+  `eval/results/A_dev_DRYRUN.jsonl`에 5줄을 저장했고, 실제 API·LangSmith 호출은
+  발생하지 않았다.
+
+### 토큰 사용량이 평가 행에 남지 않는 문제
+
+- 증상: 기존 상태는 `cost_usd`만 누적하고 `tokens`를 보존하지 않았다.
+- 왜 문제인가: Phase 5 비용 표에는 조건별 평균 토큰이 필요하다. VLM·LLM·임베딩 중
+  하나라도 빠지면 에이전트 층의 비용을 과소 계산한다.
+- 조치: `AgentState` 및 초기 상태에 `tokens`를 추가했다. route·plan·judge·write의
+  LLM 사용량, Observer·Cross-Checker의 VLM 사용량, RAG query 임베딩 사용량을
+  Spec-Judge에서 병합하고 서버 metadata와 평가 JSONL에 전달했다.
+- 결과: dry-run 5건 모두 1,882 tokens로 기록됐고, 행당 추정 비용은
+  0.006217 USD, 누적은 0.031085 USD였다.
+
+### 조건 비교를 독립 표본처럼 계산할 위험
+
+- 증상: B0·B1·A는 같은 이미지를 판정하므로 조건별 정확도만 나란히 놓으면
+  짝지은 정보를 버리게 된다.
+- 왜 문제인가: 실험 설계는 같은 `id`의 Before/After 정·오답 변화를 검정해야
+  하며, 정상·결함 비율이 다른 자료에서 단순 독립 비교는 검정력을 잃는다.
+- 조치: `eval/evaluators.py`에 코드 기반 이진·유형·확신도·인용·비용 지표와,
+  scipy 없이 정확 이항분포를 쓰는 McNemar 양측 검정을 구현했다. McNemar는
+  전체·정상·결함 층을 따로 낸다. `eval/report.py`는 조건·품목·비용 표를
+  마크다운으로 생성하고, `eval/human_check.py`는 B0/A 보고서를 조건 비노출로
+  섞어 사람 환각 채점을 보조한다.
+- 결과: 손계산 예제 `b=10, c=2`의 정확 p-value `0.03857421875`를 일치시켰고,
+  평가 지표·리포트·블라인드 도구 테스트 16개가 통과했다.
+
+### Phase 5 완료 검증
+
+- `A/dev/limit 5` dry-run: 5건 전부 `PASS`, 오류 0건, JSONL 스키마 20개 필드 일치.
+- 샘플 ID: `screw-good-004`, `005`, `007`, `010`, `012`.
+- 평가 지표·출력·실행기 대상 테스트: `20 passed`.
+- fake 전체 회귀 테스트: `73 passed in 11.38s`.
+- 실제 API 실험, held-out 실험, 다른 조건 실험은 실행하지 않았다.
 - 기준서·가이드는 수정하지 않았고 테스트 이미지를 시각적으로 열지 않았다.

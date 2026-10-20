@@ -31,6 +31,7 @@ def _empty_result(*, replace: bool = False, skipped: bool = False,
             "events": events,
             "retries": 0,
             "elapsed": 0.0,
+            "tokens": 0,
             "usd": 0.0,
             "done_task_indices": done_task_indices or [],
         }
@@ -93,6 +94,7 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
             "events": [done_event],
             "retries": int(retries),
             "elapsed": elapsed,
+            "tokens": int(result.get("tokens", 0)),
             "usd": float(result.get("usd", 0.0)),
             "done_task_indices": pending,
         }

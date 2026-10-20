@@ -6,7 +6,7 @@ from typing import Any
 
 from langsmith import traceable
 
-from agent.nodes.common import _cost, load_type_map
+from agent.nodes.common import _cost, _tokens, load_type_map
 from agent.state import AgentState
 
 
@@ -88,13 +88,18 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         if str(observation.get("text", "")).strip()
     )
 
-    usage: dict = {"usd": 0.0}
+    usage: dict = {"tokens": 0, "usd": 0.0}
+    embedding_usage: dict = {"tokens": 0, "usd": 0.0}
     if observations_text:
         spec_hits = list(deps.vector_store.search(
             observations_text,
             item=state["item"],
             k=3,
         ))[:3]
+        embedder = getattr(deps.vector_store, "embedder", None)
+        last_usage = getattr(embedder, "last_usage", None)
+        if isinstance(last_usage, dict):
+            embedding_usage = last_usage
         raw_judgement, usage = deps.fast_llm.judge(
             observations_text,
             spec_hits,
@@ -140,8 +145,21 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         float(observer_result.get("usd", 0.0))
         + float(cross_result.get("usd", 0.0))
     )
+    vlm_tokens = (
+        int(observer_result.get("tokens", 0))
+        + int(cross_result.get("tokens", 0))
+    )
     total_usage = dict(usage or {})
-    total_usage["usd"] = float(total_usage.get("usd", 0.0)) + vlm_usd
+    total_usage["tokens"] = (
+        int(total_usage.get("tokens", 0))
+        + int(embedding_usage.get("tokens", 0))
+        + vlm_tokens
+    )
+    total_usage["usd"] = (
+        float(total_usage.get("usd", 0.0))
+        + float(embedding_usage.get("usd", 0.0))
+        + vlm_usd
+    )
 
     clause_ids = [
         str(hit["clause_id"])
@@ -170,5 +188,6 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         "retry_count": retry_count,
         "parallel_elapsed": parallel_elapsed,
         "cost_usd": _cost(state, total_usage),
+        "tokens": _tokens(state, total_usage),
         "events": events,
     }

@@ -9,7 +9,7 @@ from langsmith import traceable
 from agent.deps import SupervisorDeps
 from agent.state import AgentState
 
-from .common import _cost, event
+from .common import _cost, _tokens, event
 
 
 def _parse_report(draft: str) -> dict:
@@ -104,5 +104,6 @@ async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
         "validation_feedback": feedback,
         "last_prompt": usage.get("prompt"),
         "cost_usd": _cost(state, usage),
+        "tokens": _tokens(state, usage),
         "events": event(state, "DraftWritten", attempt=attempt),
     }

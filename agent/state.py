@@ -23,6 +23,7 @@ class AgentState(TypedDict, total=False):
     final: str
     last_prompt: str
     cost_usd: float
+    tokens: int
     events: list[dict]
 
     image_path: str

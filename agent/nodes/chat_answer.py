@@ -6,7 +6,7 @@ from langsmith import traceable
 from agent.deps import SupervisorDeps
 from agent.state import AgentState
 
-from .common import _cost, event, load_type_map
+from .common import _cost, _tokens, event, load_type_map
 
 
 @traceable(name="chat_answer_node")
@@ -29,5 +29,6 @@ async def chat_answer_node(state: AgentState, deps: SupervisorDeps) -> dict:
         "final": reply,
         "last_prompt": usage.get("prompt"),
         "cost_usd": _cost(state, usage),
+        "tokens": _tokens(state, usage),
         "events": event(state, "Finalize", pipeline="chat-direct"),
     }

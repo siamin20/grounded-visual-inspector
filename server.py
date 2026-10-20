@@ -64,7 +64,7 @@ class ResumeRequest(BaseModel):
 
 def _build_llms():
     """LLM_BACKEND=fake(기본, 결정론) | ollama(로컬 실모델) | openai(실제 OpenAI API)."""
-    backend = os.environ.get("LLM_BACKEND", "fake")
+    backend = os.environ.get("LLM_BACKEND", "fake").strip().lower()
     if backend == "ollama":
         from agent.ollama_llm import OllamaFastLLM, OllamaQualityLLM
         fast = OllamaFastLLM(os.environ.get("OLLAMA_FAST_MODEL", "qwen3:0.6b"),
@@ -79,9 +79,11 @@ def _build_llms():
         quality = OpenAIQualityLLM(os.environ.get("OPENAI_QUALITY_MODEL", "gpt-4o"),
                                    usd_per_1k_tokens=0.005)
         return backend, fast, quality
-    fast = FastLLM("fast-model-stub", usd_per_1k_tokens=0.00015)
-    quality = QualityLLM("quality-model-stub", usd_per_1k_tokens=0.005)
-    return backend, fast, quality
+    if backend == "fake":
+        fast = FastLLM("fast-model-stub", usd_per_1k_tokens=0.00015)
+        quality = QualityLLM("quality-model-stub", usd_per_1k_tokens=0.005)
+        return backend, fast, quality
+    raise ValueError(f"지원하지 않는 LLM_BACKEND입니다: {backend}")
 
 
 @asynccontextmanager
@@ -193,6 +195,7 @@ def _metadata(result: dict, run_id: str | None) -> dict:
         "parallel_elapsed": result.get("parallel_elapsed"),
         "validation_attempts": result.get("validation_attempts", 0),
         "cost_usd": result.get("cost_usd", 0.0),
+        "tokens": result.get("tokens", 0),
         "verdict": result.get("verdict", report.get("verdict")),
         "defect_type": result.get("defect_type", report.get("defect_type")),
         "confidence": result.get("confidence", report.get("confidence")),
@@ -258,6 +261,7 @@ def _initial_state(
         "validation_errors": [],
         "events": [],
         "cost_usd": 0.0,
+        "tokens": 0,
         "ablation": ablation,
         "hitl_rejections": 0,
         "_observer_result": {},

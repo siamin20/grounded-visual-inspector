@@ -1,0 +1,35 @@
+{
+  "condition": "A",
+  "split": "dev",
+  "dry_run": true,
+  "requested_samples": 20,
+  "processed_samples": 20,
+  "error_count": 0,
+  "cumulative_usd": 0.12887,
+  "budget_usd": 15.0,
+  "budget_exceeded": false,
+  "binary_metrics": {
+    "n": 20,
+    "tp": 8,
+    "tn": 12,
+    "fp": 0,
+    "fn": 0,
+    "accuracy": 1.0,
+    "balanced_accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "fpr": 0.0,
+    "fnr": 0.0
+  },
+  "cost_latency": {
+    "n": 20,
+    "latency_p50_s": 0.016903,
+    "latency_p95_s": 0.0361625500000001,
+    "mean_tokens": 1930.6,
+    "mean_usd": 0.0064435000000000004,
+    "hitl_rate": 0.0,
+    "mean_validation_attempts": 2.0
+  },
+  "result_path": "/Users/sia/Documents/SKALA/15주차/과제/grounded-visual-inspector/eval/results/A_dev_DRYRUN.jsonl"
+}

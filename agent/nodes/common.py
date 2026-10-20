@@ -45,3 +45,8 @@ def event(state: AgentState, event_type: str | None = None, **fields: Any) -> li
 def _cost(state: AgentState, usage: dict | None) -> float:
     usd = float((usage or {}).get("usd", 0.0))
     return round(float(state.get("cost_usd", 0.0)) + usd, 6)
+
+
+def _tokens(state: AgentState, usage: dict | None) -> int:
+    """모델·임베딩 사용량의 실측 토큰 수를 상태에 누적한다."""
+    return int(state.get("tokens", 0)) + int((usage or {}).get("tokens", 0))
