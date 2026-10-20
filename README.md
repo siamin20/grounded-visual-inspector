@@ -1,6 +1,6 @@
 # grounded-visual-inspector
 
-> 근거 검증 루프를 가진 VLM 외관 불량 판정 멀티에이전트
+> 제품 이미지 불량을 판정하고 근거를 검증하는 Vision QA Agent
 
 Multi-agent visual defect inspector that grounds VLM observations in spec documents (RAG), cross-checks them, and asks a human before risky actions.
 
