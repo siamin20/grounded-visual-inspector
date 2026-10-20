@@ -1,7 +1,8 @@
 # grounded-visual-inspector 트러블슈팅 기록
 
 - 작성일: 2026-10-20
-- 범위: Phase 1 데이터·기준서, Phase 2 vision MCP, Phase 3 그래프·RAG 이식
+- 범위: Phase 1 데이터·기준서, Phase 2 vision MCP, Phase 3 그래프·RAG 이식,
+  Phase 4 서버·HITL·웹 UI
 - 원칙: 기준서를 작성·검토할 때 테스트 이미지를 열지 않고, MVTec 유형 정의와 일반 품질 기준만 사용했다.
 
 ## 1. Phase 1 최초 구성
@@ -241,3 +242,78 @@ Phase 1 당시 자동 테스트 파일이 아직 없어 `pytest -q`는 `no tests
 - RAG: 4개 기준서 25개 조항 색인, 품목 필터 top-3, clause/full-text 조회 통과.
 - fake 전체 테스트: `44 passed`; `import agent.graph`, `compileall`, `git diff --check` 통과.
 - 기준서·가이드와 실제 테스트 이미지는 열거나 수정하지 않았다.
+
+## 8. Phase 4 서버·HITL·웹 UI
+
+### 같은 관찰문이 보고서에 반복되는 문제
+
+- 증상: Observer의 5개 크롭이 같은 문장을 반환하면 `report.observations`에 같은 문장이
+  최대 5번 반복됐다.
+- 왜 문제인가: 같은 근거가 여러 개인 것처럼 보이고 최종 보고서가 불필요하게 길어지며,
+  단순히 한 항목을 제거하면 어떤 VLM 호출에서 나온 근거인지 추적 정보가 사라진다.
+- 조치: `write_node`가 보고서 JSON을 파싱한 직후 `text`가 완전히 같은 항목을 하나로
+  합치고, 모든 `source_call_id`를 등장 순서대로 중복 없이 리스트에 보존한다. validator와
+  finalizer는 기존 문자열과 새 리스트 형식을 모두 처리한다.
+- 결과: 같은 문장은 한 번만 렌더되고 `obs-full`, `obs-tl` 같은 원본 호출 ID는 모두 남는다.
+  공백까지 다른 문장은 임의로 합치지 않는 회귀 테스트도 통과했다.
+
+### `ApprovalRequired`의 거짓·중복 이벤트
+
+- 증상: 승인이 필요하지 않은 보고서도 `required=false`인 `ApprovalRequired`를 냈고,
+  validate 반려 뒤 write가 재실행될 때마다 같은 승인 이벤트가 반복됐다.
+- 왜 문제인가: UI가 불필요한 승인 카드를 만들 수 있고, 승인한 요청이 재작성 루프에서 다시
+  멈추거나 반려 후 같은 위험 조치를 계속 재승인해야 하는 루프가 생길 수 있다.
+- 조치: required가 false이면 승인 이벤트를 생략한다. interactive에서는 최초
+  `interrupt()` payload만 `ApprovalRequired`로 보내고 resume 후에는 `ApprovalResolved`만
+  누적한다. 승인·반려 상태를 요청 안에서 보존해 이후 write 재진입은 다시 중단하지 않는다.
+- 결과: 위험 보고서는 요청당 `ApprovalRequired`가 정확히 1회 발생하고 `[PAUSED]`에서
+  멈춘 뒤 `/chat/resume`으로 이어진다. 일반 보고서는 승인 이벤트 없이 완료된다.
+
+### 서버 재시작 직후 resume이 간헐적으로 상태를 못 찾는 문제
+
+- 증상: `__interrupt__` 청크를 받은 즉시 `astream` 반복기를 종료하면, 바로 서버 lifespan을
+  닫고 다시 연 테스트에서 저장된 중단 상태가 없는 경우가 있었다.
+- 왜 문제인가: 설치된 `AsyncSqliteSaver`는 비동기 쓰기를 사용하므로 스트림 조기 종료와
+  SQLite checkpoint 저장 취소가 경합하면 “서버 재시작 후 재개” 계약을 보장할 수 없다.
+- 조치: 설치 버전(`langgraph 1.2.16`, `langgraph-checkpoint-sqlite 3.1.2`)의 실제 API를
+  확인해 `AsyncSqliteSaver.from_conn_string()`을 lifespan 전체에서 열었다. 모든 v2 호출은
+  `durability="sync"`와 같은 `configurable.thread_id`를 쓰고, interrupt 뒤 반복기를 자연
+  종료한 다음 `[PAUSED]`를 보낸다.
+- 결과: 첫 lifespan에서 중단하고 SQLite 연결을 닫은 뒤, 두 번째 lifespan에서 같은
+  thread ID로 `/chat/resume`해 `FinalAnswer → [DONE]`까지 완료했다. 중단 전 이벤트도
+  재전송되지 않았다.
+
+### 같은 thread ID의 다음 요청이 이전 승인을 재사용하는 문제
+
+- 증상: checkpointer를 붙인 뒤 같은 thread ID로 새 검사를 시작하면 이전 요청의
+  `approval`, `report`, `validation_attempts`가 새 입력과 병합될 수 있었다.
+- 왜 문제인가: 앞선 요청의 `decision=approve`가 남으면 다음 위험 보고서가 HITL을 건너뛸
+  수 있고, 재작성 횟수와 관찰 결과도 요청 사이에서 오염된다.
+- 조치: 새 그래프 입력을 만들 때 승인·보고서뿐 아니라 task, 관찰, 판정, 검증, 비용,
+  분기 임시 결과 등 모든 요청 단위 필드를 명시적으로 초기화하고 대화 history만 유지한다.
+- 결과: 같은 thread ID로 두 번째 위험 검사를 보내도 다시 정확히 한 번 중단되며, 첫 요청을
+  resume하기 전에는 어느 요청도 세션 이력에 저장되지 않는다.
+
+### 업로드·상태 관측 계약 누락
+
+- 증상: 서버에 `/inspect`, `/chat/resume`이 없고 `/health`와 `/chat` metadata만으로는
+  실행 중인 VLM·임베딩·HITL 설정과 판정 결과를 확인할 수 없었다. 진행 이벤트에도 실제
+  관찰문과 교차 판독 요약이 없어 UI가 구체적인 문장을 표시할 수 없었다.
+- 왜 문제인가: 브라우저가 POST 업로드 스트림이나 승인 재개를 수행할 수 없고, 평가·운영
+  로그에서 실행 조건과 `verdict`, `defect_type`, VLM 호출 수를 재현하기 어렵다.
+- 조치: 10MB 제한과 Pillow 검증을 거친 이미지만
+  `data/uploads/{thread_id}/{uuid}.png`로 저장하고, 프록시는 multipart/JSON SSE를 그대로
+  중계한다. `/health`에 `vlm_backend`, `embed_backend`, `hitl_mode`, `ablation`을,
+  metadata에 판정·승인·호출 수 필드를 추가했다. Vue UI에는 품목 선택, 썸네일, 진행 카드,
+  승인·반려 버튼을 연결했고 관찰·교차 이벤트에 문장 필드를 추가했다.
+- 결과: 경로 조작 파일명, 비이미지, 10MB 초과 업로드를 거부하고 UUID PNG만 남긴다.
+  `HITL_MODE=auto_approve`에서는 중단 없이 `[DONE]`까지 완료하며, interactive에서는
+  승인 카드에서 재개할 수 있다.
+
+### Phase 4 완료 검증
+
+- fake 전체 테스트: `53 passed in 12.08s`.
+- `/inspect`: UUID PNG 저장, 경로 조작·비이미지·10MB 초과 차단 확인.
+- HITL: interactive 중단·승인·반려, auto-approve 무중단, SQLite 재시작 복원 확인.
+- `import agent.graph`, Python compile, Vue 인라인 JavaScript 문법, `git diff --check` 통과.
+- 기준서·가이드는 수정하지 않았고 테스트 이미지를 시각적으로 열지 않았다.

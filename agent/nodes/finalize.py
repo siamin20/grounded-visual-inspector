@@ -10,13 +10,22 @@ from agent.state import AgentState
 from .common import event
 
 
+def _source_label(source_call_id) -> str:
+    source_ids = (
+        source_call_id if isinstance(source_call_id, list) else [source_call_id]
+    )
+    return ", ".join(
+        f"`{source_id}`" for source_id in source_ids if isinstance(source_id, str)
+    )
+
+
 @traceable(name="finalize_node")
 async def finalize_node(state: AgentState, deps: SupervisorDeps) -> dict:
     del deps
     report = state.get("report") or {}
     observations = report.get("observations") or []
     observation_lines = [
-        f"- {value.get('text', '')} (`{value.get('source_call_id', '')}`)"
+        f"- {value.get('text', '')} ({_source_label(value.get('source_call_id'))})"
         for value in observations
         if isinstance(value, dict)
     ] or ["- 관찰 기록 없음"]

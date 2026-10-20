@@ -53,10 +53,18 @@ def _schema_errors(report: dict) -> list[str]:
     if report.get("confidence") not in {"high", "low"}:
         errors.append("confidence 값이 high/low가 아님")
     observations = report.get("observations")
+
+    def valid_source_id(value) -> bool:
+        return isinstance(value, str) or (
+            isinstance(value, list)
+            and bool(value)
+            and all(isinstance(source_id, str) for source_id in value)
+        )
+
     if not isinstance(observations, list) or any(
         not isinstance(value, dict)
         or not isinstance(value.get("text"), str)
-        or not isinstance(value.get("source_call_id"), str)
+        or not valid_source_id(value.get("source_call_id"))
         for value in (observations or [])
     ):
         errors.append("observations 스키마 불일치")

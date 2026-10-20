@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="utf-8" />
-<title>운영 에이전트 채팅 (Vue)</title>
+<title>제품 결함 판정 에이전트</title>
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }
@@ -40,6 +40,7 @@
   }
   .row.user .bubble { background: #5b5bd6; color: white; border-bottom-right-radius: 4px; }
   .row.agent .bubble { background: #2e2e42; border-bottom-left-radius: 4px; }
+  .thumbnail { display: block; max-width: 220px; max-height: 160px; margin-bottom: 8px; border-radius: 8px; }
   .steps {
     max-width: 70%; font-size: 12px; color: #9a9ac0; padding: 6px 14px;
     display: flex; flex-direction: column; gap: 3px;
@@ -64,12 +65,37 @@
     background: #11111a; color: #c3c3e0; white-space: pre-wrap; word-break: break-word;
     font-family: ui-monospace, "SF Mono", Menlo, monospace; max-height: 320px; overflow-y: auto;
   }
-  form { display: flex; gap: 8px; padding: 14px 20px; background: #262638; border-top: 1px solid #3a3a52; }
-  input {
+  .event-card, .approval-card {
+    align-self: flex-start; max-width: 70%; padding: 9px 12px; border-radius: 10px;
+    background: #262638; border: 1px solid #3a3a52; font-size: 13px;
+  }
+  .event-title { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; color: #b8b8dc; }
+  .badge, .chip {
+    display: inline-block; padding: 2px 7px; border-radius: 999px; background: #3a3a52;
+    color: #d8d8f0; font-size: 11px;
+  }
+  .badge.pass { background: #245c3d; color: #b8f3cb; }
+  .badge.reject { background: #71363f; color: #ffd0d4; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; }
+  .muted { color: #9292ad; font-size: 12px; }
+  .approval-card { border-color: #8b6d34; background: #302b22; }
+  .approval-actions { display: flex; gap: 7px; margin-top: 9px; }
+  .approval-actions button { padding: 7px 12px; }
+  .approval-actions .reject-button { background: #71363f; }
+  .composer, .inspect-bar {
+    display: flex; gap: 8px; padding: 12px 20px; background: #262638;
+    border-top: 1px solid #3a3a52;
+  }
+  .inspect-bar { padding-bottom: 0; align-items: center; }
+  input[type="text"] {
     flex: 1; padding: 11px 14px; border-radius: 10px; border: 1px solid #3a3a52;
     background: #1e1e2e; color: #e2e2f0; font-size: 14px;
   }
-  input:focus { outline: 1px solid #5b5bd6; }
+  input:focus, select:focus { outline: 1px solid #5b5bd6; }
+  input[type="file"], select {
+    min-width: 0; padding: 8px; border-radius: 8px; border: 1px solid #3a3a52;
+    background: #1e1e2e; color: #e2e2f0;
+  }
   button {
     padding: 11px 20px; border-radius: 10px; border: none; background: #5b5bd6;
     color: white; font-size: 14px; cursor: pointer;
@@ -79,11 +105,14 @@
 </head>
 <body>
 <div id="app">
-  <header>운영 인시던트 대응 에이전트 <span>{{ backendLabel }}</span></header>
+  <header>제품 결함 판정 에이전트 <span>{{ backendLabel }}</span></header>
   <div id="log" ref="logEl">
     <template v-for="item in log" :key="item.id">
       <div v-if="item.kind === 'user'" class="row user">
-        <div class="bubble">{{ item.text }}</div>
+        <div class="bubble">
+          <img v-if="item.thumbnail" :src="item.thumbnail" class="thumbnail" alt="업로드 이미지" />
+          {{ item.text }}
+        </div>
       </div>
 
       <div v-else-if="item.kind === 'steps'" class="steps">
@@ -94,19 +123,65 @@
         <div class="bubble">{{ item.text }}</div>
       </div>
 
+      <div v-else-if="item.kind === 'observation'" class="event-card">
+        <div class="event-title"><span class="badge">{{ item.region }}</span> Observer 관찰</div>
+        <div>{{ item.text }}</div>
+      </div>
+
+      <div v-else-if="item.kind === 'cross'" class="event-card">
+        <div class="event-title">Cross-Checker <span class="badge" :class="item.agree ? 'pass' : 'reject'">{{ item.agree ? '일치' : '불일치' }}</span></div>
+        <div class="muted">{{ item.text }}</div>
+      </div>
+
+      <div v-else-if="item.kind === 'spec'" class="event-card">
+        <div class="event-title">기준 대조</div>
+        <div class="chips"><span v-for="clause in item.clauses" :key="clause" class="chip">{{ clause }}</span></div>
+      </div>
+
+      <div v-else-if="item.kind === 'analysis'" class="event-card">
+        <div class="event-title">판정 <span class="badge" :class="item.verdict === 'PASS' ? 'pass' : 'reject'">{{ item.verdict }}</span> <span class="badge">{{ item.confidence }}</span></div>
+      </div>
+
+      <div v-else-if="item.kind === 'validation'" class="event-card muted">
+        검증 반려: {{ item.errors.join(', ') }}
+      </div>
+
+      <div v-else-if="item.kind === 'approval'" class="approval-card">
+        <div class="event-title">관리자 승인 필요 <span class="badge">{{ item.report.verdict || '검토' }}</span></div>
+        <div>{{ item.report.summary || '제안된 조치를 확인해 주세요.' }}</div>
+        <div v-if="item.report.actions?.length" class="muted">조치: {{ item.report.actions.join(', ') }}</div>
+        <div v-if="item.status" class="muted">{{ item.status }}</div>
+        <div v-if="!item.resolved" class="approval-actions">
+          <button type="button" :disabled="item.resolving" @click="resumeApproval(item, 'approve')">승인</button>
+          <button type="button" class="reject-button" :disabled="item.resolving" @click="resumeApproval(item, 'reject')">반려</button>
+        </div>
+      </div>
+
       <details v-else-if="item.kind === 'prompt'" class="prompt-box">
         <summary>LLM에 전달된 최종 프롬프트 보기</summary>
         <pre>{{ item.text }}</pre>
       </details>
     </template>
   </div>
-  <form @submit.prevent="onSubmit">
+  <div class="inspect-bar">
+    <select v-model="selectedItem" :disabled="sending || paused" aria-label="품목">
+      <option value="screw">screw</option>
+      <option value="bottle">bottle</option>
+      <option value="metal_nut">metal_nut</option>
+      <option value="hazelnut">hazelnut</option>
+    </select>
+    <input ref="fileInput" type="file" accept="image/*" :disabled="sending || paused" @change="onFileChange" />
+    <button type="button" :disabled="sending || paused || !selectedFile" @click="onInspect">검사</button>
+  </div>
+  <form class="composer" @submit.prevent="onSubmit">
     <input
+      type="text"
       v-model="input"
       autocomplete="off"
-      placeholder="예: auth-service 로그인 응답이 느려졌어요. 원인 확인해주세요"
+      placeholder="검사 방법이나 결과에 대해 물어보세요"
+      :disabled="sending || paused"
     />
-    <button type="submit" :disabled="sending">보내기</button>
+    <button type="submit" :disabled="sending || paused">보내기</button>
   </form>
 </div>
 
@@ -115,15 +190,14 @@
 const { createApp, ref, reactive, nextTick } = Vue;
 
 const STEP_LABELS = {
-  PlanCreated: e => `계획 수립: 할 일 ${e.task_count}가지${e.targets?.length ? ` (시스템: ${e.targets.join(', ')})` : ''}`,
-  GateApplied: e => e.removed_analysis_tasks ? `불필요한 작업 ${e.removed_analysis_tasks}건 제거` : null,
-  TaskCompleted: e => (e.source === 'monitoring'
-      ? `모니터링 지표 확인 (시스템: ${e.target})`
-      : `대응 매뉴얼(runbook) 조회 (장애유형: ${e.target})`) + (e.retries ? ' (재시도 성공)' : ''),
-  ReplanCheck: e => e.is_sufficient ? null : `정보 부족 → 장애유형 "${e.target}"로 추가 조사`,
-  DraftWritten: e => `답변 초안 작성 (시도 ${e.attempt})`,
-  Validation: e => e.verdict === '합격' ? '검수 통과' : '검수 반려 → 다시 작성',
-  Finalize: () => '최종 답변 완성',
+  RouteDecided: e => e.route === 'inspection' ? '이미지 검사 경로 선택' : '일반 대화 경로 선택',
+  PlanCreated: e => `검사 계획 수립: ${e.task_count || e.tasks?.length || 0}개 작업`,
+  GateApplied: e => e.removed_analysis_tasks ? `중복 작업 ${e.removed_analysis_tasks}건 제거` : '검사 계획 검증',
+  ReplanCheck: e => e.is_sufficient ? '관찰 정보 충분' : '정보 부족 → 추가 관찰',
+  DraftWritten: e => `보고서 작성 (시도 ${e.attempt})`,
+  ApprovalResolved: e => `승인 결정 반영: ${e.decision === 'approve' ? '승인' : '반려'}`,
+  Validation: e => e.verdict === 'accepted' ? '보고서 검증 통과' : null,
+  Finalize: () => '최종 보고서 완성',
 };
 
 createApp({
@@ -132,12 +206,19 @@ createApp({
     const log = ref([]);
     const input = ref('');
     const sending = ref(false);
+    const paused = ref(false);
     const logEl = ref(null);
+    const fileInput = ref(null);
+    const selectedItem = ref('screw');
+    const selectedFile = ref(null);
+    const selectedPreview = ref('');
     const thread = 't-web-' + Math.random().toString(36).slice(2, 8);
     let nextId = 0;
 
     fetch('/health').then(r => r.json()).then(h => {
-      backendLabel.value = `${h.llm_backend} 실모델(${h.fast_llm}/${h.quality_llm}) · all_total_vue`;
+      const vlm = h.vlm_backend ? ` · VLM ${h.vlm_backend}` : '';
+      const hitl = h.hitl_mode ? ` · HITL ${h.hitl_mode}` : '';
+      backendLabel.value = `LLM ${h.llm_backend || '-'}${vlm}${hitl}`;
     }).catch(() => {});
 
     async function scrollToBottom() {
@@ -145,65 +226,285 @@ createApp({
       if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight;
     }
 
+    function addError(message) {
+      log.value.push({ id: nextId++, kind: 'agent', text: `요청 처리 중 오류가 발생했습니다.\n${message}` });
+      sending.value = false;
+      scrollToBottom();
+    }
+
+    function createStreamContext() {
+      const stepsItem = reactive({ id: nextId++, kind: 'steps', steps: [] });
+      log.value.push(stepsItem);
+      scrollToBottom();
+      return {
+        stepsItem,
+        streamItem: null,
+        streamAttempt: null,
+        observerFlags: [],
+        observerRegions: new Set(),
+        approvalCard: null,
+        decision: null,
+        paused: false,
+        ended: false,
+      };
+    }
+
+    function observationText(event) {
+      if (event.text || event.observation) return event.text || event.observation;
+      const signal = event.anomaly_seen === true
+        ? '이상 징후를 관찰했습니다.'
+        : event.anomaly_seen === false
+          ? '뚜렷한 이상 징후를 관찰하지 않았습니다.'
+          : '관찰 결과만으로 이상 여부를 확정하지 못했습니다.';
+      return event.regions?.length ? `${signal} 영역: ${event.regions.join(', ')}` : signal;
+    }
+
+    function resolveApproval(event, ctx) {
+      const card = ctx.approvalCard || [...log.value].reverse().find(
+        item => item.kind === 'approval' && !item.resolved
+      );
+      if (!card) return;
+      card.resolving = false;
+      card.resolved = true;
+      card.status = event.decision === 'approve' ? '승인됨' : '반려됨';
+    }
+
+    function handleEvent(event, ctx) {
+      if (event.type === 'AnswerToken') {
+        if (!ctx.streamItem || ctx.streamAttempt !== event.attempt) {
+          ctx.streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
+          log.value.push(ctx.streamItem);
+          ctx.streamAttempt = event.attempt;
+        }
+        ctx.streamItem.text += event.delta || '';
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'ObservationReady') {
+        ctx.observerFlags.push(event.anomaly_seen);
+        for (const region of event.regions || []) ctx.observerRegions.add(region);
+        log.value.push({
+          id: nextId++, kind: 'observation', region: event.region || 'full',
+          text: observationText(event),
+        });
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'CrossCheckDone') {
+        const anomaly = ctx.observerFlags.some(value => value === true);
+        const sameAnomaly = anomaly === event.anomaly_seen;
+        const overlap = (event.regions || []).some(region => ctx.observerRegions.has(region));
+        const agree = typeof event.agree === 'boolean'
+          ? event.agree
+          : event.skipped ? true : sameAnomaly && (!anomaly || overlap);
+        log.value.push({
+          id: nextId++, kind: 'cross', agree,
+          text: event.skipped
+            ? '비교 관찰이 생략되었습니다.'
+            : event.summary || `${event.regions?.length ? `관찰 영역: ${event.regions.join(', ')}` : '관찰 영역 없음'}`,
+        });
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'SpecJudged') {
+        log.value.push({
+          id: nextId++, kind: 'spec', clauses: event.clause_ids?.length ? event.clause_ids : ['해당 없음'],
+        });
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'AnalysisDecided') {
+        log.value.push({
+          id: nextId++, kind: 'analysis', verdict: event.verdict, confidence: event.confidence,
+        });
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'Validation' && event.verdict !== 'accepted') {
+        log.value.push({
+          id: nextId++, kind: 'validation', errors: event.errors?.length ? event.errors : ['보고서 검증 불합격'],
+        });
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'ApprovalRequired') {
+        if (event.required === false) return;
+        const card = reactive({
+          id: nextId++, kind: 'approval', report: event.report || {}, resolving: false,
+          resolved: false, status: '',
+        });
+        ctx.approvalCard = card;
+        log.value.push(card);
+        paused.value = true;
+        scrollToBottom();
+        return;
+      }
+
+      if (event.type === 'ApprovalResolved') resolveApproval(event, ctx);
+
+      if (event.type === 'FinalAnswer') {
+        if (!ctx.streamItem) {
+          ctx.streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
+          log.value.push(ctx.streamItem);
+        }
+        ctx.streamItem.text = event.reply || '';
+        if (event.prompt) log.value.push({ id: nextId++, kind: 'prompt', text: event.prompt });
+        ctx.streamItem = null;
+        ctx.streamAttempt = null;
+        scrollToBottom();
+        return;
+      }
+
+      const makeLabel = STEP_LABELS[event.type];
+      if (!makeLabel) return;
+      const label = makeLabel(event);
+      if (label) ctx.stepsItem.steps.push(label);
+      scrollToBottom();
+    }
+
+    function handleSseData(data, ctx) {
+      if (data === '[DONE]') {
+        ctx.ended = true;
+        sending.value = false;
+        paused.value = false;
+        if (ctx.approvalCard && !ctx.approvalCard.resolved) {
+          ctx.approvalCard.resolving = false;
+          ctx.approvalCard.resolved = true;
+          ctx.approvalCard.status = ctx.decision === 'approve' ? '승인됨' : '반려됨';
+        }
+        return true;
+      }
+      if (data === '[PAUSED]') {
+        ctx.paused = true;
+        sending.value = false;
+        paused.value = true;
+        return true;
+      }
+      let event;
+      try { event = JSON.parse(data); } catch { return false; }
+      handleEvent(event, ctx);
+      return false;
+    }
+
+    function consumeBlock(block, ctx) {
+      const data = block.split('\n')
+        .filter(line => line.startsWith('data:'))
+        .map(line => line.slice(5).trimStart())
+        .join('\n');
+      if (data) handleSseData(data, ctx);
+    }
+
+    async function consumeFetch(response, ctx) {
+      if (!response.ok) {
+        const detail = await response.text();
+        throw new Error(`${response.status} ${detail || response.statusText}`);
+      }
+      if (!response.body) throw new Error('스트림 응답 본문이 없습니다.');
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+      while (true) {
+        const { value, done } = await reader.read();
+        buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+        let boundary;
+        while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+          consumeBlock(buffer.slice(0, boundary), ctx);
+          buffer = buffer.slice(boundary + 2);
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) consumeBlock(buffer, ctx);
+      if (!ctx.paused && !ctx.ended) sending.value = false;
+    }
+
     function onSubmit() {
       const text = input.value.trim();
-      if (!text) return;
+      if (!text || sending.value || paused.value) return;
 
       log.value.push({ id: nextId++, kind: 'user', text });
       input.value = '';
       sending.value = true;
       scrollToBottom();
 
-      const stepsItem = reactive({ id: nextId++, kind: 'steps', steps: [] });
-      log.value.push(stepsItem);
-      scrollToBottom();
-
+      const ctx = createStreamContext();
       const url = `/chat/stream?message=${encodeURIComponent(text)}&thread_id=${encodeURIComponent(thread)}`;
       const es = new EventSource(url);
-      let streamItem = null;
-      let streamAttempt = null;   // write_node 재작성(attempt 증가) 시 새 말풍선으로 끊는다
 
       es.onmessage = (event) => {
-        if (event.data === '[DONE]') { es.close(); sending.value = false; return; }
-        let e;
-        try { e = JSON.parse(event.data); } catch { return; }
-
-        if (e.type === 'AnswerToken') {
-          if (!streamItem || streamAttempt !== e.attempt) {
-            streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
-            log.value.push(streamItem);
-            streamAttempt = e.attempt;
-          }
-          streamItem.text += e.delta;
-          scrollToBottom();
-          return;
-        }
-
-        if (e.type === 'FinalAnswer') {
-          if (!streamItem) {
-            streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
-            log.value.push(streamItem);
-          }
-          streamItem.text = e.reply;   // 토큰 합산 결과와 서버의 최종 텍스트를 일치시킨다
-          if (e.prompt) log.value.push({ id: nextId++, kind: 'prompt', text: e.prompt });
-          streamItem = null;
-          streamAttempt = null;
-          scrollToBottom();
-          return;
-        }
-
-        const fn = STEP_LABELS[e.type];
-        if (!fn) return;
-        const label = fn(e);
-        if (!label) return;
-        stepsItem.steps.push(label);
-        scrollToBottom();
+        if (handleSseData(event.data, ctx)) es.close();
       };
 
-      es.onerror = () => { es.close(); sending.value = false; };
+      es.onerror = () => {
+        es.close();
+        if (!ctx.ended && !ctx.paused) addError('스트림 연결이 끊어졌습니다.');
+      };
     }
 
-    return { backendLabel, log, input, sending, logEl, onSubmit };
+    function onFileChange(event) {
+      const file = event.target.files?.[0] || null;
+      selectedFile.value = file;
+      selectedPreview.value = file ? URL.createObjectURL(file) : '';
+    }
+
+    async function onInspect() {
+      if (!selectedFile.value || sending.value || paused.value) return;
+      const file = selectedFile.value;
+      const item = selectedItem.value;
+      const thumbnail = selectedPreview.value;
+      log.value.push({ id: nextId++, kind: 'user', text: `${item} 이미지 검사`, thumbnail });
+      sending.value = true;
+      const ctx = createStreamContext();
+      const form = new FormData();
+      form.append('file', file);
+      form.append('item', item);
+      form.append('thread_id', thread);
+      try {
+        const response = await fetch('/inspect', { method: 'POST', body: form });
+        await consumeFetch(response, ctx);
+      } catch (error) {
+        addError(error.message || String(error));
+      } finally {
+        selectedFile.value = null;
+        selectedPreview.value = '';
+        if (fileInput.value) fileInput.value.value = '';
+      }
+    }
+
+    async function resumeApproval(card, decision) {
+      if (card.resolving) return;
+      card.resolving = true;
+      card.status = decision === 'approve' ? '승인 반영 중…' : '반려 반영 중…';
+      sending.value = true;
+      const ctx = createStreamContext();
+      ctx.approvalCard = card;
+      ctx.decision = decision;
+      try {
+        const response = await fetch('/chat/resume', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ thread_id: thread, decision, note: '' }),
+        });
+        await consumeFetch(response, ctx);
+      } catch (error) {
+        card.resolving = false;
+        card.status = '재개 실패';
+        sending.value = false;
+        paused.value = true;
+        addError(error.message || String(error));
+      }
+    }
+
+    return {
+      backendLabel, log, input, sending, paused, logEl, fileInput,
+      selectedItem, selectedFile, selectedPreview,
+      onSubmit, onFileChange, onInspect, resumeApproval,
+    };
   },
 }).mount('#app');
 </script>

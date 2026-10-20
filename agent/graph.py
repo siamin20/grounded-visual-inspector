@@ -33,7 +33,13 @@ def _after_hitl(state: AgentState) -> str:
 
 
 def _after_validate(state: AgentState) -> str:
-    return "finalize" if state.get("validation_passed") else "write"
+    if not state.get("validation_passed"):
+        return "write"
+    approval = state.get("approval") or {}
+    if approval.get("required") and approval.get("decision") is None:
+        # 재작성 상한 뒤 low confidence로 강제 통과한 보고서도 사람 승인을 거친다.
+        return "hitl"
+    return "finalize"
 
 
 def build_graph(deps: SupervisorDeps, checkpointer=None):
@@ -74,7 +80,7 @@ def build_graph(deps: SupervisorDeps, checkpointer=None):
     graph.add_conditional_edges(
         "validate",
         _after_validate,
-        {"write": "write", "finalize": "finalize"},
+        {"write": "write", "hitl": "hitl", "finalize": "finalize"},
     )
     graph.add_edge("finalize", END)
     return graph.compile(checkpointer=checkpointer)

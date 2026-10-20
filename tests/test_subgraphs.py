@@ -255,6 +255,16 @@ async def test_research_runs_observer_and_cross_before_spec_judge(
         for event in result["events"]
         if event["type"] == "ObservationReady"
     )
+    observation_events = [
+        event for event in result["events"]
+        if event["type"] == "ObservationReady"
+    ]
+    assert all(event["text"] for event in observation_events)
+    cross_event = next(
+        event for event in result["events"]
+        if event["type"] == "CrossCheckDone"
+    )
+    assert cross_event["summary"] == result["cross_check"]["summary"]
 
 
 @pytest.mark.asyncio

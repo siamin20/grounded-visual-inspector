@@ -44,10 +44,22 @@ def test_fake_post_chat_returns_grounded_report(monkeypatch) -> None:
     assert "SCREW-04" in report["spec_clauses"]
     assert report["actions"]
     assert all(
-        observation["source_call_id"] != "hallucinated-observation"
+        "hallucinated-observation" not in observation["source_call_id"]
         for observation in report["observations"]
     )
     assert body["metadata"]["validation_attempts"] == 2
+    expected_metadata = {
+        "verdict": "REJECT",
+        "defect_type": "scratch_neck",
+        "confidence": "high",
+        "approval_required": False,
+        "hitl_mode": "interactive",
+        "vlm_calls": 6,
+        "ablation": "",
+    }
+    assert {
+        key: body["metadata"][key] for key in expected_metadata
+    } == expected_metadata
     assert _event_types(body["events"]) == [
         "RouteDecided",
         "PlanCreated",
@@ -62,10 +74,8 @@ def test_fake_post_chat_returns_grounded_report(monkeypatch) -> None:
         "ReplanCheck",
         "AnalysisDecided",
         "DraftWritten",
-        "ApprovalRequired",
         "Validation",
         "DraftWritten",
-        "ApprovalRequired",
         "Validation",
         "Finalize",
     ]
@@ -112,10 +122,8 @@ def test_fake_sse_preserves_event_order_and_format(monkeypatch) -> None:
         "ReplanCheck",
         "AnalysisDecided",
         "DraftWritten",
-        "ApprovalRequired",
         "Validation",
         "DraftWritten",
-        "ApprovalRequired",
         "Validation",
         "Finalize",
     ]

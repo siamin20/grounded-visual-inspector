@@ -130,6 +130,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
         ready_event = {
             "type": "ObservationReady",
             "region": region,
+            "text": observation["text"],
             "anomaly_seen": observation["anomaly_seen"],
             "regions": observation["regions"],
         }

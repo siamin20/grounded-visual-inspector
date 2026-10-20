@@ -16,5 +16,6 @@ class SupervisorDeps:
     session_store: Any   # Wave 12 — SQLite 세션 저장소
     version: str         # Wave 14 — SUPERVISOR_VERSION (v1/v2)
     vector_store: Any = None
+    checkpointer: Any = None
     hitl_mode: str = "interactive"
     ablation: str = ""

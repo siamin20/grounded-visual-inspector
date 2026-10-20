@@ -1,19 +1,52 @@
 """LLM을 쓰지 않는 Phase 3 규칙 노드 테스트."""
 
+import json
+import uuid
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import START, StateGraph
+from langgraph.types import Command
 
 from agent.fake_llm import FastLLM
+from agent.graph import _after_validate
 from agent.nodes.analysis import analysis_node
+from agent.nodes.finalize import finalize_node
 from agent.nodes.hitl import hitl_node
 from agent.nodes.route import route_node
 from agent.nodes.validate import validate_node
+from agent.nodes.write import write_node
+from agent.state import AgentState
 
 
 class ClauseStore:
     def has(self, clause_id: str, item: str) -> bool:
         return clause_id == "SCREW-04" and item == "screw"
+
+
+class DuplicateObservationLLM:
+    async def write_report(self, _context, _attempt, _feedback, on_token=None):
+        report = {
+            "verdict": "PASS",
+            "defect_type": None,
+            "confidence": "high",
+            "observations": [
+                {"text": "같은 관찰", "source_call_id": "obs-tl"},
+                {"text": "같은 관찰", "source_call_id": ["obs-tr", "obs-tl"]},
+                {"text": "같은 관찰 ", "source_call_id": "obs-space"},
+                {"text": "다른 관찰", "source_call_id": "obs-full"},
+            ],
+            "spec_clauses": [],
+            "actions": ["통과"],
+            "lot": {},
+            "summary": "정상입니다.",
+        }
+        draft = json.dumps(report, ensure_ascii=False)
+        if on_token is not None:
+            on_token(draft)
+        return draft, {"usd": 0.0, "prompt": "test"}
 
 
 def _valid_state() -> dict:
@@ -54,6 +87,18 @@ def _valid_state() -> dict:
         "validation_attempts": 1,
         "ablation": "",
     }
+
+
+def test_forced_validation_routes_through_hitl_before_finalize() -> None:
+    assert _after_validate({"validation_passed": False}) == "write"
+    assert _after_validate({
+        "validation_passed": True,
+        "approval": {"required": True, "decision": None},
+    }) == "hitl"
+    assert _after_validate({
+        "validation_passed": True,
+        "approval": {"required": True, "decision": "approve"},
+    }) == "finalize"
 
 
 @pytest.mark.asyncio
@@ -137,7 +182,7 @@ async def test_writer_cannot_override_code_decision_or_crash_hitl() -> None:
         "confidence": "low",
         "actions": [{"action": "폐기"}],
     }
-    hitl = await hitl_node(state, SimpleNamespace(hitl_mode="interactive"))
+    hitl = await hitl_node(state, SimpleNamespace(hitl_mode="auto_approve"))
     assert hitl["approval"]["required"] is True  # low 확신도로 HITL
 
     result = await validate_node(
@@ -146,3 +191,138 @@ async def test_writer_cannot_override_code_decision_or_crash_hitl() -> None:
     assert result["validation_passed"] is False
     assert any("코드 판정과 보고서" in error for error in result["validation_errors"])
     assert any("actions" in error for error in result["validation_errors"])
+
+
+@pytest.mark.asyncio
+async def test_write_merges_exact_observations_and_preserves_all_call_ids(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "agent.nodes.write.get_stream_writer", lambda: lambda _event: None
+    )
+    state = {
+        "query": "검사해줘",
+        "item": "screw",
+        "lot": {},
+        "observations": [],
+        "cross_check": {},
+        "spec_hits": [],
+        "judgement": {},
+        "verdict": "PASS",
+        "defect_type": None,
+        "confidence": "high",
+        "events": [],
+        "validation_attempts": 0,
+        "cost_usd": 0.0,
+    }
+    result = await write_node(
+        state,
+        SimpleNamespace(quality_llm=DuplicateObservationLLM()),
+    )
+
+    assert result["report"]["observations"] == [
+        {
+            "text": "같은 관찰",
+            "source_call_id": ["obs-tl", "obs-tr"],
+        },
+        {
+            "text": "같은 관찰 ",
+            "source_call_id": ["obs-space"],
+        },
+        {
+            "text": "다른 관찰",
+            "source_call_id": ["obs-full"],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_validate_and_finalize_accept_merged_and_legacy_source_ids() -> None:
+    state = _valid_state()
+    state["report"]["observations"] = [
+        {
+            "text": state["observations"][0]["text"],
+            "source_call_id": ["obs-tl", "obs-tr"],
+        }
+    ]
+    validated = await validate_node(
+        state, SimpleNamespace(vector_store=ClauseStore(), ablation="")
+    )
+    assert validated["validation_passed"] is True
+
+    state["report"]["observations"].append(
+        {
+            "text": state["observations"][0]["text"],
+            "source_call_id": "obs-full",
+        }
+    )
+    finalized = await finalize_node(state, None)
+    assert "(`obs-tl`, `obs-tr`)" in finalized["final"]
+    assert "(`obs-full`)" in finalized["final"]
+
+
+@pytest.mark.asyncio
+async def test_hitl_interrupts_once_and_resume_only_resolves_approval() -> None:
+    builder = StateGraph(AgentState)
+    builder.add_node(
+        "hitl",
+        partial(
+            hitl_node,
+            deps=SimpleNamespace(hitl_mode="interactive"),
+        ),
+    )
+    builder.add_edge(START, "hitl")
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": f"hitl-{uuid.uuid4()}"}}
+    state = _valid_state()
+    state["report"]["actions"] = ["폐기"]
+
+    paused = await graph.ainvoke(state, config=config)
+    assert len(paused["__interrupt__"]) == 1
+    assert paused["__interrupt__"][0].value == {
+        "type": "ApprovalRequired",
+        "report": state["report"],
+    }
+    assert not any(
+        event["type"] == "ApprovalRequired" for event in paused.get("events", [])
+    )
+
+    resumed = await graph.ainvoke(
+        Command(resume={"decision": "approve", "note": "확인"}),
+        config=config,
+    )
+    assert resumed["approval"] == {
+        "required": True,
+        "decision": "approve",
+        "note": "확인",
+    }
+    assert [event["type"] for event in resumed["events"]] == ["ApprovalResolved"]
+
+    reject_config = {"configurable": {"thread_id": f"hitl-{uuid.uuid4()}"}}
+    rejected_pause = await graph.ainvoke(state, config=reject_config)
+    assert len(rejected_pause["__interrupt__"]) == 1
+    rejected = await graph.ainvoke(
+        Command(resume={"decision": "reject", "note": "조치 변경"}),
+        config=reject_config,
+    )
+    assert rejected["hitl_rejections"] == 1
+    after_rewrite = await hitl_node(
+        rejected, SimpleNamespace(hitl_mode="interactive")
+    )
+    assert after_rewrite["approval"]["decision"] == "approve"
+    assert "events" not in after_rewrite
+
+
+@pytest.mark.asyncio
+async def test_hitl_omits_unneeded_event_and_deduplicates_reentry() -> None:
+    state = _valid_state()
+    skipped = await hitl_node(state, SimpleNamespace(hitl_mode="interactive"))
+    assert skipped["approval"]["required"] is False
+    assert "events" not in skipped
+
+    state["report"]["actions"] = ["폐기"]
+    first = await hitl_node(state, SimpleNamespace(hitl_mode="auto_approve"))
+    state.update(first)
+    second = await hitl_node(state, SimpleNamespace(hitl_mode="auto_approve"))
+    assert [event["type"] for event in state["events"]].count("ApprovalRequired") == 1
+    assert "events" not in second

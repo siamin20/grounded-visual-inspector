@@ -82,6 +82,7 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
     done_event = {
         "type": "CrossCheckDone",
         "skipped": False,
+        "summary": cross_check["summary"],
         "anomaly_seen": cross_check["anomaly_seen"],
         "regions": restored_regions,
     }
