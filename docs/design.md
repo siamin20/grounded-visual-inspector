@@ -109,6 +109,8 @@ v1 대비 변경: research를 2단계 구조로 정정, 환각률 독립 측정,
 ## 4. 아키텍처
 
 ### 4.1 그래프 (Base `graph.py` 노드 유지)
+전체 구성도·상태 흐름·시퀀스 다이어그램은 [architecture.md](architecture.md) 에 mermaid 로 있다.
+
 ```
 route ──chat──▶ chat_answer
   └──inspection──▶ plan ▶ gate ▶ research ▶ replan_check ▶ analysis ▶ write ▶ [HITL approve] ▶ validate ▶ finalize

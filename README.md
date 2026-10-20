@@ -36,7 +36,7 @@ route ─▶ plan ─▶ gate ─▶ research ──▶ analysis ─▶ write �
 | 환각률 | TBD | TBD |
 | p50 지연 / 비용 | TBD | TBD |
 
-상세 설계와 검증 체계는 [docs/design.md](docs/design.md) 참고.
+상세 설계와 검증 체계는 [docs/design.md](docs/design.md), 구성도와 시퀀스 다이어그램은 [docs/architecture.md](docs/architecture.md) 참고.
 
 ## Status
 
