@@ -150,3 +150,16 @@ hazelnut: total=52, good=20, dev=14, heldout=38
 - 데이터 보정 중 기준서 SHA-256이 변하지 않았다.
 
 Phase 1 당시 자동 테스트 파일이 아직 없어 `pytest -q`는 `no tests ran`(종료 코드 5)를 반환했다. 코드 테스트 실패가 아니라 수집할 테스트가 없었던 상태였다.
+
+## 3. Phase 2 리뷰에서 발견한 것
+
+### 결함 유형 목록 하드코딩
+
+- 증상: `agent/vision/backends.py` 에 품목별 결함 유형 목록(`_DEFECT_TYPES`)이 딕셔너리로
+  직접 박혀 있었다. 같은 정보가 `eval/type_map.json` 에도 있어 출처가 둘이 됐다.
+- 왜 문제인가: 품목을 추가하거나 유형을 제외할 때 두 곳을 같이 고쳐야 하고, 하나만 고치면
+  baseline 프롬프트와 채점 기준이 어긋난다. Base Agent 에서도 시스템명 하드코딩이 같은 종류의
+  회귀를 냈던 전례가 있다(`docs/base/regression_test_queries.md`).
+- 조치: Phase 3 에서 `type_map.json` 을 단일 출처로 삼아 vision 백엔드도 거기서 읽도록 변경.
+  해소되면 아래에 결과를 적는다.
+- 결과: (Phase 3 완료 후 기록)
