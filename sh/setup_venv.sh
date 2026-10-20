@@ -37,7 +37,7 @@ echo "requirements.txt 설치 중..."
 
 echo
 echo "설치 확인:"
-./.venv/bin/python3 -c "import fastapi, uvicorn, langgraph, langsmith, fastmcp, mcp, httpx, dotenv; print('  필요 패키지 전부 import 성공')"
+./.venv/bin/python3 -c "import fastapi, uvicorn, langgraph, langsmith, fastmcp, mcp, httpx, dotenv, PIL, numpy, huggingface_hub, pytest, pytest_asyncio, multipart; from langgraph.checkpoint.sqlite import SqliteSaver; print('  필요 패키지 전부 import 성공')"
 
 cat <<EOF
 

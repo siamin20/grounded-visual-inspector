@@ -1,0 +1,100 @@
+{
+  "screw": {
+    "good": [
+      "good",
+      "정상",
+      "결함 없음"
+    ],
+    "scratch_head": [
+      "scratch_head",
+      "머리 긁힘",
+      "헤드 표면 긁힘"
+    ],
+    "scratch_neck": [
+      "scratch_neck",
+      "목 긁힘",
+      "네크 긁힘"
+    ],
+    "thread_side": [
+      "thread_side",
+      "측면 나사산 손상",
+      "나사산 측면 변형"
+    ],
+    "thread_top": [
+      "thread_top",
+      "상단 나사산 손상",
+      "나사산 위쪽 변형"
+    ]
+  },
+  "bottle": {
+    "good": [
+      "good",
+      "정상",
+      "결함 없음"
+    ],
+    "broken_large": [
+      "broken_large",
+      "큰 파손",
+      "대규모 깨짐"
+    ],
+    "broken_small": [
+      "broken_small",
+      "작은 파손",
+      "소규모 깨짐"
+    ],
+    "contamination": [
+      "contamination",
+      "오염",
+      "이물"
+    ]
+  },
+  "metal_nut": {
+    "good": [
+      "good",
+      "정상",
+      "결함 없음"
+    ],
+    "bent": [
+      "bent",
+      "굽음",
+      "휘어짐"
+    ],
+    "color": [
+      "color",
+      "색상 이상",
+      "변색"
+    ],
+    "scratch": [
+      "scratch",
+      "긁힘",
+      "표면 스크래치"
+    ]
+  },
+  "hazelnut": {
+    "good": [
+      "good",
+      "정상",
+      "결함 없음"
+    ],
+    "crack": [
+      "crack",
+      "균열",
+      "꺼짐"
+    ],
+    "cut": [
+      "cut",
+      "절단",
+      "베임"
+    ],
+    "hole": [
+      "hole",
+      "구멍",
+      "천공"
+    ],
+    "print": [
+      "print",
+      "인쇄 흔적",
+      "표면 마킹"
+    ]
+  }
+}

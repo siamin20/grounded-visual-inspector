@@ -1,0 +1,1291 @@
+{
+  "seed": 20261020,
+  "items": [
+    "screw",
+    "bottle",
+    "metal_nut",
+    "hazelnut"
+  ],
+  "samples": [
+    {
+      "id": "screw-good-000",
+      "path": "data/mvtec/screw/test/good/000.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-001",
+      "path": "data/mvtec/screw/test/good/001.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-002",
+      "path": "data/mvtec/screw/test/good/002.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-003",
+      "path": "data/mvtec/screw/test/good/003.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-004",
+      "path": "data/mvtec/screw/test/good/004.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-005",
+      "path": "data/mvtec/screw/test/good/005.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "screw-good-006",
+      "path": "data/mvtec/screw/test/good/006.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "screw-good-007",
+      "path": "data/mvtec/screw/test/good/007.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-008",
+      "path": "data/mvtec/screw/test/good/008.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "screw-good-009",
+      "path": "data/mvtec/screw/test/good/009.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-good-010",
+      "path": "data/mvtec/screw/test/good/010.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "screw-good-011",
+      "path": "data/mvtec/screw/test/good/011.png",
+      "item": "screw",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_head-000",
+      "path": "data/mvtec/screw/test/scratch_head/000.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_head-001",
+      "path": "data/mvtec/screw/test/scratch_head/001.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_head-002",
+      "path": "data/mvtec/screw/test/scratch_head/002.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_head-003",
+      "path": "data/mvtec/screw/test/scratch_head/003.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_head-004",
+      "path": "data/mvtec/screw/test/scratch_head/004.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-scratch_head-005",
+      "path": "data/mvtec/screw/test/scratch_head/005.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-scratch_head-006",
+      "path": "data/mvtec/screw/test/scratch_head/006.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_head-010",
+      "path": "data/mvtec/screw/test/scratch_head/010.png",
+      "item": "screw",
+      "label": "scratch_head",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_neck-000",
+      "path": "data/mvtec/screw/test/scratch_neck/000.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_neck-002",
+      "path": "data/mvtec/screw/test/scratch_neck/002.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_neck-003",
+      "path": "data/mvtec/screw/test/scratch_neck/003.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-scratch_neck-004",
+      "path": "data/mvtec/screw/test/scratch_neck/004.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-scratch_neck-005",
+      "path": "data/mvtec/screw/test/scratch_neck/005.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_neck-006",
+      "path": "data/mvtec/screw/test/scratch_neck/006.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_neck-008",
+      "path": "data/mvtec/screw/test/scratch_neck/008.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-scratch_neck-009",
+      "path": "data/mvtec/screw/test/scratch_neck/009.png",
+      "item": "screw",
+      "label": "scratch_neck",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_side-001",
+      "path": "data/mvtec/screw/test/thread_side/001.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-thread_side-002",
+      "path": "data/mvtec/screw/test/thread_side/002.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_side-006",
+      "path": "data/mvtec/screw/test/thread_side/006.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_side-007",
+      "path": "data/mvtec/screw/test/thread_side/007.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_side-008",
+      "path": "data/mvtec/screw/test/thread_side/008.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_side-009",
+      "path": "data/mvtec/screw/test/thread_side/009.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_side-010",
+      "path": "data/mvtec/screw/test/thread_side/010.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-thread_side-011",
+      "path": "data/mvtec/screw/test/thread_side/011.png",
+      "item": "screw",
+      "label": "thread_side",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-000",
+      "path": "data/mvtec/screw/test/thread_top/000.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-001",
+      "path": "data/mvtec/screw/test/thread_top/001.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-002",
+      "path": "data/mvtec/screw/test/thread_top/002.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-005",
+      "path": "data/mvtec/screw/test/thread_top/005.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-006",
+      "path": "data/mvtec/screw/test/thread_top/006.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-007",
+      "path": "data/mvtec/screw/test/thread_top/007.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "screw-thread_top-008",
+      "path": "data/mvtec/screw/test/thread_top/008.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "screw-thread_top-010",
+      "path": "data/mvtec/screw/test/thread_top/010.png",
+      "item": "screw",
+      "label": "thread_top",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-good-000",
+      "path": "data/mvtec/bottle/test/good/000.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-001",
+      "path": "data/mvtec/bottle/test/good/001.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-good-002",
+      "path": "data/mvtec/bottle/test/good/002.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-003",
+      "path": "data/mvtec/bottle/test/good/003.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-good-004",
+      "path": "data/mvtec/bottle/test/good/004.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-005",
+      "path": "data/mvtec/bottle/test/good/005.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-006",
+      "path": "data/mvtec/bottle/test/good/006.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-good-007",
+      "path": "data/mvtec/bottle/test/good/007.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-008",
+      "path": "data/mvtec/bottle/test/good/008.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-good-009",
+      "path": "data/mvtec/bottle/test/good/009.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-010",
+      "path": "data/mvtec/bottle/test/good/010.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-good-011",
+      "path": "data/mvtec/bottle/test/good/011.png",
+      "item": "bottle",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-000",
+      "path": "data/mvtec/bottle/test/broken_large/000.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-broken_large-001",
+      "path": "data/mvtec/bottle/test/broken_large/001.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-002",
+      "path": "data/mvtec/bottle/test/broken_large/002.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-003",
+      "path": "data/mvtec/bottle/test/broken_large/003.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-004",
+      "path": "data/mvtec/bottle/test/broken_large/004.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-008",
+      "path": "data/mvtec/bottle/test/broken_large/008.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-009",
+      "path": "data/mvtec/bottle/test/broken_large/009.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_large-010",
+      "path": "data/mvtec/bottle/test/broken_large/010.png",
+      "item": "bottle",
+      "label": "broken_large",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-broken_small-000",
+      "path": "data/mvtec/bottle/test/broken_small/000.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_small-002",
+      "path": "data/mvtec/bottle/test/broken_small/002.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_small-003",
+      "path": "data/mvtec/bottle/test/broken_small/003.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-broken_small-005",
+      "path": "data/mvtec/bottle/test/broken_small/005.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-broken_small-006",
+      "path": "data/mvtec/bottle/test/broken_small/006.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_small-008",
+      "path": "data/mvtec/bottle/test/broken_small/008.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_small-009",
+      "path": "data/mvtec/bottle/test/broken_small/009.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-broken_small-011",
+      "path": "data/mvtec/bottle/test/broken_small/011.png",
+      "item": "bottle",
+      "label": "broken_small",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-001",
+      "path": "data/mvtec/bottle/test/contamination/001.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-002",
+      "path": "data/mvtec/bottle/test/contamination/002.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-003",
+      "path": "data/mvtec/bottle/test/contamination/003.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "bottle-contamination-004",
+      "path": "data/mvtec/bottle/test/contamination/004.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-005",
+      "path": "data/mvtec/bottle/test/contamination/005.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-008",
+      "path": "data/mvtec/bottle/test/contamination/008.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-010",
+      "path": "data/mvtec/bottle/test/contamination/010.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "bottle-contamination-011",
+      "path": "data/mvtec/bottle/test/contamination/011.png",
+      "item": "bottle",
+      "label": "contamination",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-good-000",
+      "path": "data/mvtec/metal_nut/test/good/000.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-good-001",
+      "path": "data/mvtec/metal_nut/test/good/001.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-002",
+      "path": "data/mvtec/metal_nut/test/good/002.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-003",
+      "path": "data/mvtec/metal_nut/test/good/003.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-004",
+      "path": "data/mvtec/metal_nut/test/good/004.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-005",
+      "path": "data/mvtec/metal_nut/test/good/005.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-006",
+      "path": "data/mvtec/metal_nut/test/good/006.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-007",
+      "path": "data/mvtec/metal_nut/test/good/007.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-good-008",
+      "path": "data/mvtec/metal_nut/test/good/008.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-009",
+      "path": "data/mvtec/metal_nut/test/good/009.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-good-010",
+      "path": "data/mvtec/metal_nut/test/good/010.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-good-011",
+      "path": "data/mvtec/metal_nut/test/good/011.png",
+      "item": "metal_nut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-bent-000",
+      "path": "data/mvtec/metal_nut/test/bent/000.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-bent-002",
+      "path": "data/mvtec/metal_nut/test/bent/002.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-bent-003",
+      "path": "data/mvtec/metal_nut/test/bent/003.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-bent-005",
+      "path": "data/mvtec/metal_nut/test/bent/005.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-bent-007",
+      "path": "data/mvtec/metal_nut/test/bent/007.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-bent-008",
+      "path": "data/mvtec/metal_nut/test/bent/008.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-bent-009",
+      "path": "data/mvtec/metal_nut/test/bent/009.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-bent-010",
+      "path": "data/mvtec/metal_nut/test/bent/010.png",
+      "item": "metal_nut",
+      "label": "bent",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-color-002",
+      "path": "data/mvtec/metal_nut/test/color/002.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-color-003",
+      "path": "data/mvtec/metal_nut/test/color/003.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-color-005",
+      "path": "data/mvtec/metal_nut/test/color/005.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-color-006",
+      "path": "data/mvtec/metal_nut/test/color/006.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-color-008",
+      "path": "data/mvtec/metal_nut/test/color/008.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-color-009",
+      "path": "data/mvtec/metal_nut/test/color/009.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-color-010",
+      "path": "data/mvtec/metal_nut/test/color/010.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-color-011",
+      "path": "data/mvtec/metal_nut/test/color/011.png",
+      "item": "metal_nut",
+      "label": "color",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-scratch-001",
+      "path": "data/mvtec/metal_nut/test/scratch/001.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-scratch-002",
+      "path": "data/mvtec/metal_nut/test/scratch/002.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-scratch-003",
+      "path": "data/mvtec/metal_nut/test/scratch/003.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-scratch-004",
+      "path": "data/mvtec/metal_nut/test/scratch/004.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-scratch-005",
+      "path": "data/mvtec/metal_nut/test/scratch/005.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-scratch-008",
+      "path": "data/mvtec/metal_nut/test/scratch/008.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "metal_nut-scratch-010",
+      "path": "data/mvtec/metal_nut/test/scratch/010.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "metal_nut-scratch-011",
+      "path": "data/mvtec/metal_nut/test/scratch/011.png",
+      "item": "metal_nut",
+      "label": "scratch",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-000",
+      "path": "data/mvtec/hazelnut/test/good/000.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-001",
+      "path": "data/mvtec/hazelnut/test/good/001.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-002",
+      "path": "data/mvtec/hazelnut/test/good/002.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-good-003",
+      "path": "data/mvtec/hazelnut/test/good/003.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-004",
+      "path": "data/mvtec/hazelnut/test/good/004.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-good-005",
+      "path": "data/mvtec/hazelnut/test/good/005.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-006",
+      "path": "data/mvtec/hazelnut/test/good/006.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-007",
+      "path": "data/mvtec/hazelnut/test/good/007.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-good-008",
+      "path": "data/mvtec/hazelnut/test/good/008.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-good-009",
+      "path": "data/mvtec/hazelnut/test/good/009.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-010",
+      "path": "data/mvtec/hazelnut/test/good/010.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-good-011",
+      "path": "data/mvtec/hazelnut/test/good/011.png",
+      "item": "hazelnut",
+      "label": "good",
+      "is_defect": false,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-crack-000",
+      "path": "data/mvtec/hazelnut/test/crack/000.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-crack-002",
+      "path": "data/mvtec/hazelnut/test/crack/002.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-crack-003",
+      "path": "data/mvtec/hazelnut/test/crack/003.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-crack-004",
+      "path": "data/mvtec/hazelnut/test/crack/004.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-crack-006",
+      "path": "data/mvtec/hazelnut/test/crack/006.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-crack-007",
+      "path": "data/mvtec/hazelnut/test/crack/007.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-crack-010",
+      "path": "data/mvtec/hazelnut/test/crack/010.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-crack-011",
+      "path": "data/mvtec/hazelnut/test/crack/011.png",
+      "item": "hazelnut",
+      "label": "crack",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-cut-001",
+      "path": "data/mvtec/hazelnut/test/cut/001.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-cut-002",
+      "path": "data/mvtec/hazelnut/test/cut/002.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-cut-003",
+      "path": "data/mvtec/hazelnut/test/cut/003.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-cut-004",
+      "path": "data/mvtec/hazelnut/test/cut/004.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-cut-007",
+      "path": "data/mvtec/hazelnut/test/cut/007.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-cut-009",
+      "path": "data/mvtec/hazelnut/test/cut/009.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-cut-010",
+      "path": "data/mvtec/hazelnut/test/cut/010.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-cut-011",
+      "path": "data/mvtec/hazelnut/test/cut/011.png",
+      "item": "hazelnut",
+      "label": "cut",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-hole-001",
+      "path": "data/mvtec/hazelnut/test/hole/001.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-hole-002",
+      "path": "data/mvtec/hazelnut/test/hole/002.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-hole-003",
+      "path": "data/mvtec/hazelnut/test/hole/003.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-hole-004",
+      "path": "data/mvtec/hazelnut/test/hole/004.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-hole-008",
+      "path": "data/mvtec/hazelnut/test/hole/008.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-hole-009",
+      "path": "data/mvtec/hazelnut/test/hole/009.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-hole-010",
+      "path": "data/mvtec/hazelnut/test/hole/010.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-hole-011",
+      "path": "data/mvtec/hazelnut/test/hole/011.png",
+      "item": "hazelnut",
+      "label": "hole",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-002",
+      "path": "data/mvtec/hazelnut/test/print/002.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-003",
+      "path": "data/mvtec/hazelnut/test/print/003.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-004",
+      "path": "data/mvtec/hazelnut/test/print/004.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-005",
+      "path": "data/mvtec/hazelnut/test/print/005.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-006",
+      "path": "data/mvtec/hazelnut/test/print/006.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-007",
+      "path": "data/mvtec/hazelnut/test/print/007.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "heldout"
+    },
+    {
+      "id": "hazelnut-print-009",
+      "path": "data/mvtec/hazelnut/test/print/009.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "dev"
+    },
+    {
+      "id": "hazelnut-print-010",
+      "path": "data/mvtec/hazelnut/test/print/010.png",
+      "item": "hazelnut",
+      "label": "print",
+      "is_defect": true,
+      "split": "dev"
+    }
+  ]
+}

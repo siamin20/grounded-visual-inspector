@@ -1,0 +1,962 @@
+{
+  "screw-good-000": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T09:15:00"
+  },
+  "screw-good-001": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T09:20:00"
+  },
+  "screw-good-002": {
+    "lot": "L2610-01",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T09:25:00"
+  },
+  "screw-good-003": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T09:30:00"
+  },
+  "screw-good-004": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T09:35:00"
+  },
+  "screw-good-005": {
+    "lot": "L2610-01",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T09:40:00"
+  },
+  "screw-good-006": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T09:45:00"
+  },
+  "screw-good-007": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T09:50:00"
+  },
+  "screw-good-008": {
+    "lot": "L2610-01",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T09:55:00"
+  },
+  "screw-good-009": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T10:00:00"
+  },
+  "screw-good-010": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T10:05:00"
+  },
+  "screw-good-011": {
+    "lot": "L2610-01",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T10:10:00"
+  },
+  "screw-scratch_head-000": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T10:15:00"
+  },
+  "screw-scratch_head-001": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T10:20:00"
+  },
+  "screw-scratch_head-002": {
+    "lot": "L2610-01",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T10:25:00"
+  },
+  "screw-scratch_head-003": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T10:30:00"
+  },
+  "screw-scratch_head-004": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T10:35:00"
+  },
+  "screw-scratch_head-005": {
+    "lot": "L2610-01",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T10:40:00"
+  },
+  "screw-scratch_head-006": {
+    "lot": "L2610-01",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T10:45:00"
+  },
+  "screw-scratch_head-010": {
+    "lot": "L2610-01",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T10:50:00"
+  },
+  "screw-scratch_neck-000": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T10:55:00"
+  },
+  "screw-scratch_neck-002": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T11:00:00"
+  },
+  "screw-scratch_neck-003": {
+    "lot": "L2610-02",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T11:05:00"
+  },
+  "screw-scratch_neck-004": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T11:10:00"
+  },
+  "screw-scratch_neck-005": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T11:15:00"
+  },
+  "screw-scratch_neck-006": {
+    "lot": "L2610-02",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T11:20:00"
+  },
+  "screw-scratch_neck-008": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T11:25:00"
+  },
+  "screw-scratch_neck-009": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T11:30:00"
+  },
+  "screw-thread_side-001": {
+    "lot": "L2610-02",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T11:35:00"
+  },
+  "screw-thread_side-002": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T11:40:00"
+  },
+  "screw-thread_side-006": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T11:45:00"
+  },
+  "screw-thread_side-007": {
+    "lot": "L2610-02",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T11:50:00"
+  },
+  "screw-thread_side-008": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T11:55:00"
+  },
+  "screw-thread_side-009": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T12:00:00"
+  },
+  "screw-thread_side-010": {
+    "lot": "L2610-02",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T12:05:00"
+  },
+  "screw-thread_side-011": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T12:10:00"
+  },
+  "screw-thread_top-000": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T12:15:00"
+  },
+  "screw-thread_top-001": {
+    "lot": "L2610-02",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T12:20:00"
+  },
+  "screw-thread_top-002": {
+    "lot": "L2610-02",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T12:25:00"
+  },
+  "screw-thread_top-005": {
+    "lot": "L2610-02",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T12:30:00"
+  },
+  "screw-thread_top-006": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T12:35:00"
+  },
+  "screw-thread_top-007": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T12:40:00"
+  },
+  "screw-thread_top-008": {
+    "lot": "L2610-03",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T12:45:00"
+  },
+  "screw-thread_top-010": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T12:50:00"
+  },
+  "bottle-good-000": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T12:55:00"
+  },
+  "bottle-good-001": {
+    "lot": "L2610-03",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T13:00:00"
+  },
+  "bottle-good-002": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T13:05:00"
+  },
+  "bottle-good-003": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T13:10:00"
+  },
+  "bottle-good-004": {
+    "lot": "L2610-03",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T13:15:00"
+  },
+  "bottle-good-005": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T13:20:00"
+  },
+  "bottle-good-006": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T13:25:00"
+  },
+  "bottle-good-007": {
+    "lot": "L2610-03",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T13:30:00"
+  },
+  "bottle-good-008": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T13:35:00"
+  },
+  "bottle-good-009": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T13:40:00"
+  },
+  "bottle-good-010": {
+    "lot": "L2610-03",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T13:45:00"
+  },
+  "bottle-good-011": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T13:50:00"
+  },
+  "bottle-broken_large-000": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T13:55:00"
+  },
+  "bottle-broken_large-001": {
+    "lot": "L2610-03",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T14:00:00"
+  },
+  "bottle-broken_large-002": {
+    "lot": "L2610-03",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T14:05:00"
+  },
+  "bottle-broken_large-003": {
+    "lot": "L2610-03",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T14:10:00"
+  },
+  "bottle-broken_large-004": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T14:15:00"
+  },
+  "bottle-broken_large-008": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T14:20:00"
+  },
+  "bottle-broken_large-009": {
+    "lot": "L2610-04",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T14:25:00"
+  },
+  "bottle-broken_large-010": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T14:30:00"
+  },
+  "bottle-broken_small-000": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T14:35:00"
+  },
+  "bottle-broken_small-002": {
+    "lot": "L2610-04",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T14:40:00"
+  },
+  "bottle-broken_small-003": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T14:45:00"
+  },
+  "bottle-broken_small-005": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T14:50:00"
+  },
+  "bottle-broken_small-006": {
+    "lot": "L2610-04",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T14:55:00"
+  },
+  "bottle-broken_small-008": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T15:00:00"
+  },
+  "bottle-broken_small-009": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T15:05:00"
+  },
+  "bottle-broken_small-011": {
+    "lot": "L2610-04",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T15:10:00"
+  },
+  "bottle-contamination-001": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T15:15:00"
+  },
+  "bottle-contamination-002": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T15:20:00"
+  },
+  "bottle-contamination-003": {
+    "lot": "L2610-04",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T15:25:00"
+  },
+  "bottle-contamination-004": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T15:30:00"
+  },
+  "bottle-contamination-005": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T15:35:00"
+  },
+  "bottle-contamination-008": {
+    "lot": "L2610-04",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T15:40:00"
+  },
+  "bottle-contamination-010": {
+    "lot": "L2610-04",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T15:45:00"
+  },
+  "bottle-contamination-011": {
+    "lot": "L2610-04",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T15:50:00"
+  },
+  "metal_nut-good-000": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T15:55:00"
+  },
+  "metal_nut-good-001": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T16:00:00"
+  },
+  "metal_nut-good-002": {
+    "lot": "L2610-05",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T16:05:00"
+  },
+  "metal_nut-good-003": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T16:10:00"
+  },
+  "metal_nut-good-004": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T16:15:00"
+  },
+  "metal_nut-good-005": {
+    "lot": "L2610-05",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T16:20:00"
+  },
+  "metal_nut-good-006": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T16:25:00"
+  },
+  "metal_nut-good-007": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T16:30:00"
+  },
+  "metal_nut-good-008": {
+    "lot": "L2610-05",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T16:35:00"
+  },
+  "metal_nut-good-009": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T16:40:00"
+  },
+  "metal_nut-good-010": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T16:45:00"
+  },
+  "metal_nut-good-011": {
+    "lot": "L2610-05",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T16:50:00"
+  },
+  "metal_nut-bent-000": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T16:55:00"
+  },
+  "metal_nut-bent-002": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T17:00:00"
+  },
+  "metal_nut-bent-003": {
+    "lot": "L2610-05",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T17:05:00"
+  },
+  "metal_nut-bent-005": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T17:10:00"
+  },
+  "metal_nut-bent-007": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T17:15:00"
+  },
+  "metal_nut-bent-008": {
+    "lot": "L2610-05",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T17:20:00"
+  },
+  "metal_nut-bent-009": {
+    "lot": "L2610-05",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T17:25:00"
+  },
+  "metal_nut-bent-010": {
+    "lot": "L2610-05",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T17:30:00"
+  },
+  "metal_nut-color-002": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T17:35:00"
+  },
+  "metal_nut-color-003": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T17:40:00"
+  },
+  "metal_nut-color-005": {
+    "lot": "L2610-06",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T17:45:00"
+  },
+  "metal_nut-color-006": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T17:50:00"
+  },
+  "metal_nut-color-008": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T17:55:00"
+  },
+  "metal_nut-color-009": {
+    "lot": "L2610-06",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T18:00:00"
+  },
+  "metal_nut-color-010": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T18:05:00"
+  },
+  "metal_nut-color-011": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T18:10:00"
+  },
+  "metal_nut-scratch-001": {
+    "lot": "L2610-06",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T18:15:00"
+  },
+  "metal_nut-scratch-002": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T18:20:00"
+  },
+  "metal_nut-scratch-003": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T18:25:00"
+  },
+  "metal_nut-scratch-004": {
+    "lot": "L2610-06",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T18:30:00"
+  },
+  "metal_nut-scratch-005": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T18:35:00"
+  },
+  "metal_nut-scratch-008": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T18:40:00"
+  },
+  "metal_nut-scratch-010": {
+    "lot": "L2610-06",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T18:45:00"
+  },
+  "metal_nut-scratch-011": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T18:50:00"
+  },
+  "hazelnut-good-000": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T18:55:00"
+  },
+  "hazelnut-good-001": {
+    "lot": "L2610-06",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T19:00:00"
+  },
+  "hazelnut-good-002": {
+    "lot": "L2610-06",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T19:05:00"
+  },
+  "hazelnut-good-003": {
+    "lot": "L2610-06",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T19:10:00"
+  },
+  "hazelnut-good-004": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T19:15:00"
+  },
+  "hazelnut-good-005": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T19:20:00"
+  },
+  "hazelnut-good-006": {
+    "lot": "L2610-07",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T19:25:00"
+  },
+  "hazelnut-good-007": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T19:30:00"
+  },
+  "hazelnut-good-008": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T19:35:00"
+  },
+  "hazelnut-good-009": {
+    "lot": "L2610-07",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T19:40:00"
+  },
+  "hazelnut-good-010": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T19:45:00"
+  },
+  "hazelnut-good-011": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T19:50:00"
+  },
+  "hazelnut-crack-000": {
+    "lot": "L2610-07",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T19:55:00"
+  },
+  "hazelnut-crack-002": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T20:00:00"
+  },
+  "hazelnut-crack-003": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T20:05:00"
+  },
+  "hazelnut-crack-004": {
+    "lot": "L2610-07",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T20:10:00"
+  },
+  "hazelnut-crack-006": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T20:15:00"
+  },
+  "hazelnut-crack-007": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T20:20:00"
+  },
+  "hazelnut-crack-010": {
+    "lot": "L2610-07",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T20:25:00"
+  },
+  "hazelnut-crack-011": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T20:30:00"
+  },
+  "hazelnut-cut-001": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T20:35:00"
+  },
+  "hazelnut-cut-002": {
+    "lot": "L2610-07",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T20:40:00"
+  },
+  "hazelnut-cut-003": {
+    "lot": "L2610-07",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T20:45:00"
+  },
+  "hazelnut-cut-004": {
+    "lot": "L2610-07",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T20:50:00"
+  },
+  "hazelnut-cut-007": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T20:55:00"
+  },
+  "hazelnut-cut-009": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T21:00:00"
+  },
+  "hazelnut-cut-010": {
+    "lot": "L2610-08",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T21:05:00"
+  },
+  "hazelnut-cut-011": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T21:10:00"
+  },
+  "hazelnut-hole-001": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T21:15:00"
+  },
+  "hazelnut-hole-002": {
+    "lot": "L2610-08",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T21:20:00"
+  },
+  "hazelnut-hole-003": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T21:25:00"
+  },
+  "hazelnut-hole-004": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T21:30:00"
+  },
+  "hazelnut-hole-008": {
+    "lot": "L2610-08",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T21:35:00"
+  },
+  "hazelnut-hole-009": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T21:40:00"
+  },
+  "hazelnut-hole-010": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T21:45:00"
+  },
+  "hazelnut-hole-011": {
+    "lot": "L2610-08",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T21:50:00"
+  },
+  "hazelnut-print-002": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T21:55:00"
+  },
+  "hazelnut-print-003": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "D",
+    "ts": "2026-10-20T22:00:00"
+  },
+  "hazelnut-print-004": {
+    "lot": "L2610-08",
+    "line": "A-2",
+    "shift": "D",
+    "ts": "2026-10-20T22:05:00"
+  },
+  "hazelnut-print-005": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "D",
+    "ts": "2026-10-20T22:10:00"
+  },
+  "hazelnut-print-006": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T22:15:00"
+  },
+  "hazelnut-print-007": {
+    "lot": "L2610-08",
+    "line": "A-2",
+    "shift": "N",
+    "ts": "2026-10-20T22:20:00"
+  },
+  "hazelnut-print-009": {
+    "lot": "L2610-08",
+    "line": "A-3",
+    "shift": "N",
+    "ts": "2026-10-20T22:25:00"
+  },
+  "hazelnut-print-010": {
+    "lot": "L2610-08",
+    "line": "A-1",
+    "shift": "N",
+    "ts": "2026-10-20T22:30:00"
+  }
+}
