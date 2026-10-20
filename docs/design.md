@@ -1,6 +1,6 @@
 # 설계서 — 이미지 기반 제품 결함 판정 및 근거 검증 멀티에이전트
 
-작성일 2026-10-20 (Day1, v2). 과제 유형: 2번 신규 프로젝트 (Base AI Agent 구조 이식).
+작성일 2026-10-20 (Day1, v2.1). 과제 유형: 2번 신규 프로젝트 (Base AI Agent 구조 이식).
 v1 대비 변경: research를 2단계 구조로 정정, 환각률 독립 측정, McNemar 검정, 실험 예산 축소, 이미지 입력 경로·HITL 재개 설계 추가, ADR·Base 패턴 유지표 추가.
 
 ---
@@ -85,16 +85,17 @@ v1 대비 변경: research를 2단계 구조로 정정, 환각률 독립 측정,
 | screw | good, scratch_head, scratch_neck, thread_side, thread_top | manipulated_front — 앞면 가공 변형은 시각 언어로 기술이 모호 |
 | bottle | good, broken_large, broken_small, contamination | 없음 |
 | metal_nut | good, bent, color, scratch | flip — 뒤집힘은 결함이 아니라 자세 문제로 기준서 작성이 어색 |
-| hazelnut (예비) | good, crack, cut, hole, print | 없음 |
+| hazelnut | good, crack, cut, hole, print | 없음 (시간 부족 시 이 품목부터 제외) |
 
 - 유형 어휘 매핑 표 `eval/type_map.json`: 에이전트 출력 유형(한국어) ↔ MVTec 폴더명. 채점 전에 고정.
-- 샘플링: 품목당 good 20장 + 결함 유형별 8장 → 약 180장. 정상:결함 비율이 1:2라 정확도 대신 balanced accuracy와 F1을 주 지표로 쓴다. 난수 시드 고정, 파일 목록을 `eval/dataset.json`에 저장.
-- dev / held-out 분리: 약 30%(60장)는 프롬프트·임계값·기준서 조정에 쓰고 약 70%(120장)는 최종 보고에만 쓰며 개발 중 열어보지 않는다. 튜닝 누출을 막기 위해서다.
+- 샘플링: 품목당 good 20장 + 결함 유형별 8장 → 4품목 192장 (screw 52, bottle 44, metal_nut 44, hazelnut 52). hazelnut을 빼면 140장. 정상:결함 비율이 1:2라 정확도 대신 balanced accuracy와 F1을 주 지표로 쓴다. 난수 시드 고정, 파일 목록을 `eval/dataset.json`에 저장.
+- dev / held-out 분리: 품목·유형별 층화로 약 30%(60장)는 프롬프트·임계값·기준서 조정에 쓰고 나머지 약 130장은 최종 보고에만 쓰며 개발 중 열어보지 않는다. 튜닝 누출을 막기 위해서다. 아래에서 held-out을 120장으로 적은 곳은 이 수치의 근사다.
 
 ### 3.2 참고 문서 (직접 작성하지만 채점 정답으로는 쓰지 않음)
 기준서와 조치 가이드는 공개 데이터에 없으므로 직접 쓴다. 이 문서들은 에이전트가 판정할 때 참고하는 자료일 뿐이고 정확도 채점의 정답은 3.1의 MVTec 라벨이다. 내가 쓴 문서로 내가 채점하는 순환을 피하기 위한 구분이다.
 
-- 검사 기준서 `data/specs/{품목}.md`: 품목별 허용/불허 기준. 조항 ID 부여(예 `SCREW-03: 목 부위 긁힘 길이 1mm 초과 시 불합격`). RAG 색인 대상. 메타데이터: 품목, 결함유형.
+- 검사 기준서 `data/specs/{품목}.md`: 품목별 허용/불허 기준. 조항 ID 부여(예 `SCREW-03: 목 부위에 나사산을 가로지르는 긁힘이 보이면 불합격`). RAG 색인 대상. 메타데이터: 품목, 결함유형.
+  - 기준은 이미지에서 확인 가능한 상대적·정성적 표현으로만 쓴다("머리 지름의 1/4 이상", "나사산을 가로지르는", "입구 테두리가 끊긴"). mm 같은 절대 치수는 VLM이 측정할 수 없어 판정이 지어낸 수치에 의존하게 되므로 쓰지 않는다.
   - 작성 규칙(편향 차단): MVTec 논문의 결함 유형 정의와 일반 품질 기준으로만 쓴다. 특정 테스트 이미지를 보고 쓰지 않는다. held-out 이미지는 열지 않는다. 작성 완료 후 git에 고정하고 평가 중 수정하지 않는다.
 - 조치 가이드 `data/guides/{결함유형}.md`: 재작업/폐기/라인 점검 등 후속 조치와 위험도(HITL 트리거 여부).
 - 정상 참조 이미지: 품목당 `train/good` 1장을 VLM에 함께 제공(MMAD 기본 설정과 동일한 1-shot 비교). Before에도 똑같이 제공한다.
@@ -120,13 +121,13 @@ research는 2단계다. Spec-Judge가 Observer의 관찰 문장을 쿼리로 쓰
 
 - route: 요청에 이미지가 있으면 inspection, 없으면 chat.
 - plan: MCP Prompt `inspection_prompt(item, lot)` 조회 → tasks `[observe, cross_check, spec_judge]`.
-- gate: 코드 규칙으로 불필요 task 제거(품목 미식별 시 spec_judge 보류하고 사용자에게 품목 질의).
+- gate: 코드 규칙으로 불필요 task 제거. 품목(item)은 필수 입력이다(UI 드롭다운, 배치는 경로에서). VLM에게 품목까지 맞히게 하면 실패 지점이 하나 더 생기므로 범위에서 뺀다. 품목이 없으면 gate가 사용자에게 되묻고 종료.
 - research — compiled subgraph 3개
-  1. Observer (1단계): MCP Tool `inspect_image(path, region="full")` 1회 + 4분할 크롭 4회 병렬. 출력에는 관찰 사실만(위치·크기·색·형태) 담는다. "불량/합격" 단어 금지(프롬프트 + 후처리 필터).
-  2. Cross-Checker (1단계, Observer와 병렬): 같은 이미지를 좌우 반전해 체크리스트형 프롬프트로 재판독. openai 백엔드에서는 Observer가 `gpt-4o-mini`, Cross-Checker가 `gpt-4o`로 모델도 다르게 한다. ollama 백엔드는 모델이 하나라 반전+프롬프트 차이만 두며, 이 경우 독립성이 약하다는 점을 결과에 적는다. 출력은 결함 유무·위치 요약.
+  1. Observer (1단계): MCP Tool `inspect_image(path, region="full")` 1회 + 4분할 크롭 4회 병렬. 출력에는 관찰 사실만(위치·크기·색·형태) 담는다. "불량/합격" 단어 금지(프롬프트 + 후처리 필터). 자유 문장과 함께 구조화 필드 `{anomaly_seen: bool, regions: [tl|tr|bl|br|center], features: [...]}`를 반드시 채운다.
+  2. Cross-Checker (1단계, Observer와 병렬): 같은 이미지를 좌우 반전해 체크리스트형 프롬프트로 재판독. openai 백엔드에서는 Observer가 `gpt-4o-mini`, Cross-Checker가 `gpt-4o`로 모델도 다르게 한다. ollama 백엔드는 모델이 하나라 반전+프롬프트 차이만 두며, 이 경우 독립성이 약하다는 점을 결과에 적는다. 출력은 같은 구조화 필드 `{anomaly_seen, regions}`(반전 좌표는 원좌표로 되돌려 기록).
   3. Spec-Judge (2단계): Observer 관찰 문장을 쿼리로 기준서 RAG top-3 조항 검색 → 조항별 충족/위반 판정 + 결함 유형 후보.
 - replan_check: Observer가 "판독 불가/해상도 부족"을 반환하면 추가 크롭 task 1회.
-- analysis(코드 규칙, LLM 아님): 합의 규칙
+- analysis(코드 규칙, LLM 아님): 합의 규칙. "일치"는 `anomaly_seen`이 같고, 둘 다 true일 때 `regions` 교집합이 비어 있지 않은 경우로 정의한다(자유 문장은 비교하지 않는다).
   - Observer·Cross-Checker 일치 + Spec-Judge 위반 조항 있음 → `REJECT, confidence=high`
   - 둘 일치 + 위반 없음 → `PASS, confidence=high`
   - 불일치 → `confidence=low` → HITL 대상
@@ -219,9 +220,9 @@ docs/adr/             # ADR 4건
 | 반려·replan 횟수, HITL 발생률 | 이벤트 로그 |
 
 환각률은 validate와 독립적으로 잰다. validate가 정의한 기준으로 validate의 효과를 재면 After가 구조적으로 0에 수렴하는 순환이 생기기 때문이다.
-- 독립 매처: validate보다 엄격한 별도 검사기(정규화 없이 8자 이상 연속 n-gram이 관찰 원문에 있어야 통과). validate 통과분이 여기서 얼마나 떨어지는지가 validate 임계값의 느슨함을 보여준다.
-- 블라인드 사람 대조: held-out 보고서 중 30건을 무작위 추출해 Before/After 표시를 가리고 관찰 원문과 대조, 근거 없는 주장 문장을 센다. 1인 채점이라는 한계는 결과에 적는다.
-- 두 값을 모두 보고하고 결론은 보수적인 쪽(높은 환각률)으로 쓴다.
+- 주 측정 — 블라인드 사람 대조: held-out 보고서 중 Before 15건·After 15건을 무작위 추출해 조건 표시를 가리고 관찰 원문과 대조, "관찰에 없는 사실을 단정한 문장"을 센다. 표현을 바꿔 쓴 것은 환각으로 세지 않는다. 1인 채점이라는 한계는 결과에 적는다.
+- 보조 진단 — 독립 매처: validate보다 엄격한 별도 검사기(정규화 없이 8자 이상 연속 n-gram 일치). 이 값은 바꿔 쓴 문장도 실패로 잡으므로 환각률이 아니라 "원문 인용 충실도"로 이름 붙여 따로 보고한다. validate 통과분이 여기서 얼마나 떨어지는지가 validate 임계값의 느슨함을 보여준다.
+- H3의 판정은 사람 대조 값으로 한다.
 
 ### 5.4 L4 신뢰도 보정
 - 플래그 유효성: `confidence=low` 건의 오답률 vs 전체 오답률 (H4).
@@ -236,7 +237,8 @@ docs/adr/             # ADR 4건
 
 ### 5.6 LangSmith와 통계
 - Dataset: held-out 이미지 경로 + 라벨. Evaluator 함수는 전부 코드 채점(LLM-as-judge 없음). 프로젝트 분리: `vision-insp-before`, `vision-insp-after`, `vision-insp-ablation-*`.
-- 검정: 같은 이미지에 대한 Before/After 짝 → McNemar. 120장에서 정확도 75% 근처의 단순 95% 신뢰구간은 약 ±8%p라 독립 표본 비교로는 검정력이 없고, 짝지은 검정이 맞는 방법이다. 신뢰구간은 효과 크기 서술용으로만 쓴다.
+- 검정: 같은 이미지에 대한 Before/After 정오 짝 → McNemar. 전체와 정상/결함 층별로 각각 수행한다(balanced accuracy는 두 층의 평균이므로).
+- H4의 검정력 한계: `confidence=low`가 held-out의 5% 수준이면 6건 안팎이라 비율 비교가 불안정하다. 그 경우 dev셋 결과를 합쳐 서술 통계로만 제시하고 가설 판정은 보류한다. 120장에서 정확도 75% 근처의 단순 95% 신뢰구간은 약 ±8%p라 독립 표본 비교로는 검정력이 없고, 짝지은 검정이 맞는 방법이다. 신뢰구간은 효과 크기 서술용으로만 쓴다.
 - 품목별 분해 표도 함께 제시한다.
 
 ---
@@ -245,7 +247,7 @@ docs/adr/             # ADR 4건
 
 | 조건 | 구성 | 분리하려는 효과 | 데이터 | 호출/장 |
 |---|---|---|---|---|
-| B0 | VLM 1회 (참조 이미지 포함, dev 튜닝 프롬프트) | 기준선 | held-out 120 | 1 |
+| B0 | VLM 1회 (참조 이미지, 품목명, 해당 품목 결함 유형 목록 제공, dev 튜닝 프롬프트) | 기준선 | held-out 120 | 1 |
 | B1 | VLM 1회 + 기준서 전문 삽입 | RAG 검색 자체의 가치 | held-out 120 | 1 |
 | A | 전체 에이전트 | 제안 방식 | held-out 120 | 약 8 |
 | A−X | Cross-Checker 제거 | 교차 검증 기여 | dev 60 | 약 7 |
