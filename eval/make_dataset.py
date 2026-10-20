@@ -22,40 +22,19 @@ DATASET_PATH = ROOT / "eval" / "dataset.json"
 TYPE_MAP_PATH = ROOT / "eval" / "type_map.json"
 LOTS_PATH = ROOT / "data" / "lots.json"
 
-ITEM_TYPES: dict[str, tuple[str, ...]] = {
-    "screw": ("good", "scratch_head", "scratch_neck", "thread_side", "thread_top"),
-    "bottle": ("good", "broken_large", "broken_small", "contamination"),
-    "metal_nut": ("good", "bent", "color", "scratch"),
-    "hazelnut": ("good", "crack", "cut", "hole", "print"),
-}
 
-TYPE_MAP: dict[str, dict[str, list[str]]] = {
-    "screw": {
-        "good": ["good", "정상", "결함 없음"],
-        "scratch_head": ["scratch_head", "머리 긁힘", "헤드 표면 긁힘"],
-        "scratch_neck": ["scratch_neck", "목 긁힘", "네크 긁힘"],
-        "thread_side": ["thread_side", "측면 나사산 손상", "나사산 측면 변형"],
-        "thread_top": ["thread_top", "상단 나사산 손상", "나사산 위쪽 변형"],
-    },
-    "bottle": {
-        "good": ["good", "정상", "결함 없음"],
-        "broken_large": ["broken_large", "큰 파손", "대규모 깨짐"],
-        "broken_small": ["broken_small", "작은 파손", "소규모 깨짐"],
-        "contamination": ["contamination", "오염", "이물"],
-    },
-    "metal_nut": {
-        "good": ["good", "정상", "결함 없음"],
-        "bent": ["bent", "굽음", "휘어짐"],
-        "color": ["color", "색상 이상", "변색"],
-        "scratch": ["scratch", "긁힘", "표면 스크래치"],
-    },
-    "hazelnut": {
-        "good": ["good", "정상", "결함 없음"],
-        "crack": ["crack", "균열", "꺼짐"],
-        "cut": ["cut", "절단", "베임"],
-        "hole": ["hole", "구멍", "천공"],
-        "print": ["print", "인쇄 흔적", "표면 마킹"],
-    },
+def _load_type_map() -> dict[str, dict[str, list[str]]]:
+    """품목·유형 목록의 SSOT인 type_map.json을 읽는다."""
+    value = json.loads(TYPE_MAP_PATH.read_text(encoding="utf-8"))
+    if not isinstance(value, dict) or not value:
+        raise RuntimeError("eval/type_map.json이 비어 있거나 잘못됐습니다.")
+    return value
+
+
+TYPE_MAP = _load_type_map()
+ITEM_TYPES = {
+    item: tuple(defect_types)
+    for item, defect_types in TYPE_MAP.items()
 }
 
 
@@ -169,7 +148,6 @@ def main() -> None:
 
     dataset = build_dataset()
     _write_json(DATASET_PATH, dataset)
-    _write_json(TYPE_MAP_PATH, TYPE_MAP)
     _write_json(LOTS_PATH, build_lots(dataset))
     print_counts(dataset)
 

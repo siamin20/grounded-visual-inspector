@@ -84,6 +84,117 @@ PLAN_SCHEMA = {
     "required": ["needs_analysis", "tasks"],
 }
 
+INSPECTION_PLAN_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "tasks": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string",
+                             "enum": ["observe", "cross_check", "spec_judge"]},
+                },
+                "required": ["kind"],
+            },
+        },
+    },
+    "required": ["tasks"],
+}
+
+JUDGE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "violations": {"type": "array", "items": {"type": "string"}},
+        "defect_type": {"type": ["string", "null"]},
+        "rationale": {"type": "string"},
+    },
+    "required": ["violations", "defect_type", "rationale"],
+}
+
+REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "verdict": {"type": "string", "enum": ["PASS", "REJECT"]},
+        "defect_type": {"type": ["string", "null"]},
+        "confidence": {"type": "string", "enum": ["high", "low"]},
+        "observations": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "text": {"type": "string"},
+                    "source_call_id": {"type": "string"},
+                },
+                "required": ["text", "source_call_id"],
+            },
+        },
+        "spec_clauses": {"type": "array", "items": {"type": "string"}},
+        "actions": {
+            "type": "array",
+            "items": {"type": "string",
+                      "enum": ["재작업", "폐기", "라인정지", "통과"]},
+            "minItems": 1,
+        },
+        "lot": {"type": "object"},
+        "summary": {"type": "string"},
+    },
+    "required": ["verdict", "defect_type", "confidence", "observations",
+                 "spec_clauses", "actions", "lot", "summary"],
+}
+
+_INSPECTION_TASKS = (
+    ("observe", "task-observe"),
+    ("cross_check", "task-cross"),
+    ("spec_judge", "task-judge"),
+)
+
+
+def _normalize_inspection_plan(raw: object) -> dict:
+    """모델이 누락·중복한 task를 내도 표준 3개 task로 보정한다."""
+    valid_kinds = set()
+    if isinstance(raw, dict) and isinstance(raw.get("tasks"), list):
+        valid_kinds = {
+            task.get("kind") for task in raw["tasks"]
+            if isinstance(task, dict)
+            and task.get("kind") in {kind for kind, _ in _INSPECTION_TASKS}
+        }
+    # 현재 표준 계획은 세 task가 모두 필수다. 모델이 낸 합법 kind를
+    # 검증한 뒤, 누락분을 포함한 전체를 고정 순서로 재구성한다.
+    valid_kinds.update(kind for kind, _ in _INSPECTION_TASKS)
+    return {"tasks": [
+        {"id": task_id, "agent": "research", "kind": kind, "status": "pending"}
+        for kind, task_id in _INSPECTION_TASKS if kind in valid_kinds
+    ]}
+
+
+def _normalize_judgement(raw: object, clauses: list[dict]) -> dict:
+    """인용 ID와 결함 유형을 입력 조항 범위 안으로 제한한다."""
+    clause_by_id = {
+        clause.get("clause_id"): clause
+        for clause in clauses
+        if isinstance(clause, dict) and isinstance(clause.get("clause_id"), str)
+    }
+    requested = raw.get("violations", []) if isinstance(raw, dict) else []
+    violations = list(dict.fromkeys(
+        clause_id for clause_id in requested
+        if clause_id in clause_by_id
+        and clause_by_id[clause_id].get("defect_type") != "good"
+    )) if isinstance(requested, list) else []
+    defect_type = None
+    if violations:
+        candidate = clause_by_id[violations[0]].get("defect_type")
+        if isinstance(candidate, str):
+            defect_type = candidate
+    rationale = raw.get("rationale") if isinstance(raw, dict) else None
+    if not isinstance(rationale, str) or not rationale.strip():
+        rationale = (
+            "입력 기준서 조항과 관찰문을 비교했습니다."
+            if violations else "인용 가능한 위반 조항이 없습니다."
+        )
+    return {"violations": violations, "defect_type": defect_type,
+            "rationale": rationale.strip()}
+
 
 class OllamaLLM:
     def __init__(self, model: str, usd_per_1k_tokens: float):
@@ -110,7 +221,8 @@ class OllamaLLM:
                  "usd": round(tokens / 1000 * self.usd_per_1k, 6)}
         return content, usage
 
-    async def _chat_stream(self, system: str, user: str, on_token=None) -> tuple[str, dict]:
+    async def _chat_stream(self, system: str, user: str, on_token=None,
+                           schema: dict | None = None) -> tuple[str, dict]:
         """사용자 대면 텍스트(최종 답변류) 전용 — Ollama NDJSON 스트림을 토큰 단위로
         받아 on_token(조각)을 즉시 호출해 SSE로 실시간 중계할 수 있게 한다. 분류/계획
         등 JSON 스키마 출력(route/plan/analyze)은 부분 출력이 의미가 없어 그대로 _chat을
@@ -122,6 +234,8 @@ class OllamaLLM:
             "stream": True,
             "options": {"temperature": 0.0},
         }
+        if schema is not None:
+            payload["format"] = schema
         chunks: list[str] = []
         usage = {"model": self.name, "tokens": 0, "usd": 0.0}
         async with httpx.AsyncClient(timeout=300.0) as client:
@@ -214,6 +328,41 @@ class OllamaFastLLM(OllamaLLM):
                   "tasks": tasks}
         return result, usage
 
+    @traceable(run_type="llm", name="ollama_fast.plan_inspection")
+    def plan_inspection(self, item: str, procedure_prompt: str) -> tuple[dict, dict]:
+        system = (
+            "당신은 제품 외관 검사 Supervisor의 planning 노드다. "
+            "표준 절차를 읽고 observe, cross_check, spec_judge 세 kind를 "
+            "한 번씩 포함한 tasks JSON 객체만 응답하라."
+        )
+        user = f"## 품목\n{item}\n\n## 표준 검사 절차\n{procedure_prompt}"
+        content, usage = self._chat(system, user, schema=INSPECTION_PLAN_SCHEMA)
+        try:
+            raw = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+        return _normalize_inspection_plan(raw), usage
+
+    @traceable(run_type="llm", name="ollama_fast.judge")
+    def judge(self, observations_text: str, clauses: list[dict],
+              item: str) -> tuple[dict, dict]:
+        system = (
+            "당신은 제품 외관 검사의 Spec-Judge다. 관찰문에 보이는 사실만을 "
+            "기준서 조항과 비교하라. 위반으로 판정한 조항 ID는 제공된 ID만 "
+            "쓰고, 위반이 없으면 violations=[]·defect_type=null로 응답하라. "
+            "JSON 객체만 응답하라."
+        )
+        user = (
+            f"## 품목\n{item}\n\n## 관찰\n{observations_text}\n\n## 기준서 조항\n"
+            + json.dumps(clauses, ensure_ascii=False)
+        )
+        content, usage = self._chat(system, user, schema=JUDGE_SCHEMA)
+        try:
+            raw = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+        return _normalize_judgement(raw, clauses), usage
+
     @traceable(run_type="llm", name="ollama_fast.analyze")
     def analyze(self, collected: list[dict]) -> tuple[str, dict]:
         system = ("당신은 ICT 운영 패턴 분석가다. 여러 시스템의 모니터링 결과를 비교해 "
@@ -259,3 +408,22 @@ class OllamaQualityLLM(OllamaLLM):
         if feedback:
             user += f"\n\n## 이전 초안에 대한 검증 반려 사유 (반드시 반영)\n{feedback}"
         return await self._chat_stream(system, user, on_token=on_token)
+
+    @traceable(run_type="llm", name="ollama_quality.write_report")
+    async def write_report(self, ctx: dict, attempt: int,
+                           feedback: str | None, on_token=None) -> tuple[str, dict]:
+        system = (
+            "당신은 제품 외관 검사 보고서 작성자다. 입력 ctx의 사실만 사용하고 "
+            "관찰 문구와 source_call_id를 그대로 인용하라. spec_clauses에는 "
+            "judgement.violations의 ID만 넣으며, PASS의 조치는 통과로 적으라. "
+            "REJECT의 조치는 guide_text에 적힌 옵션에서만 고르라. JSON 객체만 응답하라."
+        )
+        user = (
+            f"## 작성 횟수\n{attempt}\n\n## 검사 컨텍스트\n"
+            + json.dumps(ctx, ensure_ascii=False, default=str)
+        )
+        if feedback:
+            user += f"\n\n## 이전 초안 반려 사유(반드시 반영)\n{feedback}"
+        return await self._chat_stream(
+            system, user, on_token=on_token, schema=REPORT_SCHEMA
+        )

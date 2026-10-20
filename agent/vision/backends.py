@@ -22,6 +22,8 @@ import httpx
 from langsmith import traceable
 from PIL import Image
 
+from agent.typemap import load_type_map
+
 from .crop import REGIONS, crop_region, flip_h, unflip_regions
 
 
@@ -29,13 +31,6 @@ Role = Literal["observer", "cross"]
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-
-_DEFECT_TYPES = {
-    "screw": ["scratch_head", "scratch_neck", "thread_side", "thread_top"],
-    "bottle": ["broken_large", "broken_small", "contamination"],
-    "metal_nut": ["bent", "color", "scratch"],
-    "hazelnut": ["crack", "cut", "hole", "print"],
-}
 
 _FAKE_OBSERVATIONS = {
     "scratch_head": ("머리 표면에 선형 긁힘이 보입니다.", ["선형 긁힘", "머리 표면"]),
@@ -178,7 +173,10 @@ def _prompt(style: str, *, item: str, region: str, has_reference: bool,
     )
     context = f"\n\n## 추가 기준\n{extra_context}" if extra_context else ""
     if style == "baseline":
-        defect_types = ", ".join(_DEFECT_TYPES.get(item, [])) or "(정의되지 않음)"
+        defect_types = ", ".join(
+            defect_type for defect_type in load_type_map().get(item, {})
+            if defect_type != "good"
+        ) or "(정의되지 않음)"
         return (
             "당신은 제품 외관 검사기다. 한국어로만 응답하라. "
             f"{image_note} 품목은 {item}이고 가능한 결함 유형은 "
@@ -293,7 +291,7 @@ class FakeVLM(VLMBackend):
     async def observe(self, image_path: str, *, item: str, region: str, style: str,
                       flip: bool, reference_path: str | None,
                       extra_context: str | None = None) -> dict[str, Any]:
-        del item, reference_path, extra_context
+        del reference_path, extra_context
         if region not in REGIONS:
             raise ValueError(f"지원하지 않는 이미지 영역입니다: {region}")
         if style not in {"observe", "checklist", "baseline"}:
@@ -313,6 +311,16 @@ class FakeVLM(VLMBackend):
             }
 
         defect_type = match.group(1)
+        if defect_type not in load_type_map().get(item, {}):
+            return {
+                "text": "판독 불가",
+                "anomaly_seen": None,
+                "regions": [],
+                "features": [],
+                "model": self.name,
+                "tokens": 0,
+                "usd": 0.0,
+            }
         if defect_type == "good":
             text = (
                 "체크리스트의 모든 항목이 아니오이며 눈에 띄는 이상이 보이지 않습니다."

@@ -72,6 +72,80 @@ PLAN_INSTRUCTIONS = (
     '"tasks": [{"agent": "research"|"analysis", "target": string(선택)}]}'
 )
 
+INSPECTION_PLAN_INSTRUCTIONS = (
+    'JSON 객체로만 응답하라. 스키마: '
+    '{"tasks": [{"kind": "observe"|"cross_check"|"spec_judge"}]}. '
+    '세 kind를 각각 한 번씩 반드시 포함하라.'
+)
+
+JUDGE_INSTRUCTIONS = (
+    'JSON 객체로만 응답하라. 스키마: '
+    '{"violations": ["제공된 조항 ID"], "defect_type": "결함 유형 또는 null", '
+    '"rationale": "근거"}'
+)
+
+REPORT_INSTRUCTIONS = (
+    'JSON 객체로만 응답하라. 스키마: '
+    '{"verdict":"PASS|REJECT","defect_type":"결함 유형|null",'
+    '"confidence":"high|low","observations":'
+    '[{"text":"실제 관찰문","source_call_id":"호출 ID"}],'
+    '"spec_clauses":["조항 ID"],'
+    '"actions":["조치"],"lot":{},"summary":"한 문단"}. '
+    'actions의 각 원소는 재작업, 폐기, 라인정지, 통과 중 하나여야 한다.'
+)
+
+_INSPECTION_TASKS = (
+    ("observe", "task-observe"),
+    ("cross_check", "task-cross"),
+    ("spec_judge", "task-judge"),
+)
+
+
+def _normalize_inspection_plan(raw: object) -> dict:
+    """모델 출력을 검사하고 누락·중복 없는 표준 3개 task로 보정한다."""
+    valid_kinds = set()
+    if isinstance(raw, dict) and isinstance(raw.get("tasks"), list):
+        valid_kinds = {
+            task.get("kind") for task in raw["tasks"]
+            if isinstance(task, dict)
+            and task.get("kind") in {kind for kind, _ in _INSPECTION_TASKS}
+        }
+    # 현재 표준 계획은 세 task가 모두 필수다. 모델이 낸 합법 kind를
+    # 검증한 뒤, 누락분을 포함한 전체를 고정 순서로 재구성한다.
+    valid_kinds.update(kind for kind, _ in _INSPECTION_TASKS)
+    return {"tasks": [
+        {"id": task_id, "agent": "research", "kind": kind, "status": "pending"}
+        for kind, task_id in _INSPECTION_TASKS if kind in valid_kinds
+    ]}
+
+
+def _normalize_judgement(raw: object, clauses: list[dict]) -> dict:
+    """인용 ID와 결함 유형을 입력 조항 범위 안으로 제한한다."""
+    clause_by_id = {
+        clause.get("clause_id"): clause
+        for clause in clauses
+        if isinstance(clause, dict) and isinstance(clause.get("clause_id"), str)
+    }
+    requested = raw.get("violations", []) if isinstance(raw, dict) else []
+    violations = list(dict.fromkeys(
+        clause_id for clause_id in requested
+        if clause_id in clause_by_id
+        and clause_by_id[clause_id].get("defect_type") != "good"
+    )) if isinstance(requested, list) else []
+    defect_type = None
+    if violations:
+        candidate = clause_by_id[violations[0]].get("defect_type")
+        if isinstance(candidate, str):
+            defect_type = candidate
+    rationale = raw.get("rationale") if isinstance(raw, dict) else None
+    if not isinstance(rationale, str) or not rationale.strip():
+        rationale = (
+            "입력 기준서 조항과 관찰문을 비교했습니다."
+            if violations else "인용 가능한 위반 조항이 없습니다."
+        )
+    return {"violations": violations, "defect_type": defect_type,
+            "rationale": rationale.strip()}
+
 
 class OpenAILLM:
     def __init__(self, model: str, usd_per_1k_tokens: float):
@@ -177,6 +251,41 @@ class OpenAIFastLLM(OpenAILLM):
                   "tasks": tasks}
         return result, usage
 
+    @traceable(run_type="llm", name="openai_fast.plan_inspection")
+    def plan_inspection(self, item: str, procedure_prompt: str) -> tuple[dict, dict]:
+        system = (
+            "당신은 제품 외관 검사 Supervisor의 planning 노드다. "
+            "표준 절차에 따라 관찰, 독립 교차 확인, 기준서 판정 계획을 세워라. "
+            + INSPECTION_PLAN_INSTRUCTIONS
+        )
+        user = f"## 품목\n{item}\n\n## 표준 검사 절차\n{procedure_prompt}"
+        content, usage = self._chat(system, user, json_mode=True)
+        try:
+            raw = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+        return _normalize_inspection_plan(raw), usage
+
+    @traceable(run_type="llm", name="openai_fast.judge")
+    def judge(self, observations_text: str, clauses: list[dict],
+              item: str) -> tuple[dict, dict]:
+        system = (
+            "당신은 제품 외관 검사의 Spec-Judge다. 관찰문에 보이는 사실만을 "
+            "기준서 조항과 비교하라. 위반으로 판정한 조항 ID는 제공된 ID만 "
+            "쓰고, 위반이 없으면 violations=[]·defect_type=null로 응답하라. "
+            + JUDGE_INSTRUCTIONS
+        )
+        user = (
+            f"## 품목\n{item}\n\n## 관찰\n{observations_text}\n\n## 기준서 조항\n"
+            + json.dumps(clauses, ensure_ascii=False)
+        )
+        content, usage = self._chat(system, user, json_mode=True)
+        try:
+            raw = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+        return _normalize_judgement(raw, clauses), usage
+
     @traceable(run_type="llm", name="openai_fast.analyze")
     def analyze(self, collected: list[dict]) -> tuple[str, dict]:
         system = ("당신은 ICT 운영 패턴 분석가다. 여러 시스템의 모니터링 결과를 비교해 "
@@ -232,6 +341,28 @@ class OpenAIQualityLLM(OpenAILLM):
         if feedback:
             user += f"\n\n## 이전 초안에 대한 검증 반려 사유 (반드시 반영)\n{feedback}"
         content, usage = self._chat(system, user)
+        usage["prompt"] = f"[SYSTEM]\n{system}\n\n[USER]\n{user}"
+        if on_token is not None:
+            on_token(content)
+        return content, usage
+
+    @traceable(run_type="llm", name="openai_quality.write_report")
+    async def write_report(self, ctx: dict, attempt: int,
+                           feedback: str | None, on_token=None) -> tuple[str, dict]:
+        system = (
+            "당신은 제품 외관 검사 보고서 작성자다. 입력 ctx의 사실만 사용하고 "
+            "관찰 문구와 source_call_id를 그대로 인용하라. spec_clauses에는 "
+            "judgement.violations의 ID만 넣으며, PASS의 조치는 통과로 적으라. "
+            "REJECT의 조치는 guide_text에 적힌 옵션에서만 고르라. "
+            + REPORT_INSTRUCTIONS
+        )
+        user = (
+            f"## 작성 횟수\n{attempt}\n\n## 검사 컨텍스트\n"
+            + json.dumps(ctx, ensure_ascii=False, default=str)
+        )
+        if feedback:
+            user += f"\n\n## 이전 초안 반려 사유(반드시 반영)\n{feedback}"
+        content, usage = self._chat(system, user, json_mode=True)
         usage["prompt"] = f"[SYSTEM]\n{system}\n\n[USER]\n{user}"
         if on_token is not None:
             on_token(content)

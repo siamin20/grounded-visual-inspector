@@ -75,8 +75,9 @@ class MCPClient:
         if self._flaky_pending and name in {"get_monitoring_status", "inspect_image"}:
             self._flaky_pending = False
             raise asyncio.TimeoutError("simulated transient timeout (Wave 9 demo)")
-        async with self._lock:
-            result = await self.sessions[server].call_tool(name, arguments)
+        # ClientSession은 request id로 동시 요청을 분리한다. Tool 호출을 전역
+        # lock으로 감싸면 Observer 5개 crop과 Cross-Checker가 모두 직렬화된다.
+        result = await self.sessions[server].call_tool(name, arguments)
         return json.loads(result.content[0].text)
 
     @traceable(run_type="tool", name="mcp.list_tools")

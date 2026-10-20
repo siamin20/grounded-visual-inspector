@@ -16,11 +16,4 @@ data/uploads/*
 data/mvtec/*
 !data/mvtec/.gitkeep
 
-# AI 코딩 도구용 지시 파일 (저장소에 포함하지 않음)
-AGENTS.md
-AGENT.md
-CLAUDE.md
-**/_TASK.md
-_tasks/
-_workspace/
 .DS_Store

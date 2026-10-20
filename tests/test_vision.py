@@ -1,6 +1,8 @@
 """Phase 2 비전 백엔드와 MCP Tool의 공개 계약 테스트."""
 
+import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from PIL import Image
@@ -23,6 +25,20 @@ INSPECT_KEYS = BACKEND_KEYS | {"region", "flip"}
 VALID_REGIONS = {"tl", "tr", "bl", "br", "center"}
 
 
+class _ConcurrentSession:
+    def __init__(self) -> None:
+        self.entered = 0
+        self.release = asyncio.Event()
+
+    async def call_tool(self, name: str, arguments: dict):
+        del name, arguments
+        self.entered += 1
+        if self.entered == 2:
+            self.release.set()
+        await asyncio.wait_for(self.release.wait(), timeout=0.2)
+        return SimpleNamespace(content=[SimpleNamespace(text="{}")])
+
+
 def _coordinate_image() -> Image.Image:
     """자른 영역의 시작·끝 좌표를 픽셀값으로 확인할 수 있는 8×8 이미지."""
     image = Image.new("RGB", (8, 8))
@@ -30,6 +46,18 @@ def _coordinate_image() -> Image.Image:
         for x in range(8):
             image.putpixel((x, y), (x, y, x + y))
     return image
+
+
+@pytest.mark.asyncio
+async def test_mcp_tool_calls_can_overlap_for_parallel_observation() -> None:
+    client = MCPClient(flaky_first_tool_call=False)
+    session = _ConcurrentSession()
+    client.sessions["vision"] = session
+    await asyncio.gather(
+        client.call_tool("inspect_image", {"region": "tl"}),
+        client.call_tool("inspect_image", {"region": "tr"}),
+    )
+    assert session.entered == 2
 
 
 @pytest.mark.parametrize(

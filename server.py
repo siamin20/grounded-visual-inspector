@@ -2,15 +2,16 @@
 
 - Wave 1  : lifespan에서 Agent 번들(MCP 연결·LLM·그래프)을 프로세스당 정확히 1회 생성,
             app.state로 모든 요청이 공유 (creation_count/instance_id로 증명)
-- Wave 2  : mcp_server.py를 subprocess(stdio)로 기동해 연결 유지
+- Wave 2  : vision·docs MCP 서버를 subprocess(stdio)로 기동해 연결 유지
 - Wave 3  : GET /chat/stream — 그래프 실행 과정을 SSE 이벤트로 스트리밍
 - Wave 12 : 대화 이력을 SQLite(session.db)에 저장 — 재시작해도 유지
-- Wave 14 : SUPERVISOR_VERSION(v1/v2) 환경변수로 legacy/신형 파이프라인 즉시 전환
+- Wave 14 : SUPERVISOR_VERSION(v1/v2) 환경변수로 Before/에이전트 기준선 전환
 - LangSmith: 요청당 chat_request 루트 run 아래로 노드·LLM·MCP 호출이 계층 기록됨
 """
 import json
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -26,6 +27,7 @@ from agent.deps import SupervisorDeps
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.graph import build_graph
 from agent.mcp_client import MCPClient
+from agent.rag import SpecIndex, make_embedder
 from agent.session_store import SqliteSessionStore
 from agent.supervisor_v1 import run_v1
 
@@ -35,6 +37,8 @@ CREATION_COUNT = 0   # Wave 1 — 프로세스 내 Agent 번들 생성 횟수 (�
 class ChatRequest(BaseModel):   # Wave 1 — Pydantic 요청 검증
     message: str
     thread_id: str = "default"
+    image_path: str | None = None
+    item: str | None = None
 
 
 def _build_llms():
@@ -64,15 +68,26 @@ async def lifespan(app: FastAPI):
     global CREATION_COUNT
     CREATION_COUNT += 1
     mcp = MCPClient()
-    await mcp.start()   # Wave 2 — MCP subprocess는 서버 수명 동안 딱 1개
+    await mcp.start()   # Wave 2 — 각 MCP subprocess 연결은 프로세스 수명 동안 1회 생성
     backend, fast_llm, quality_llm = _build_llms()
     app.state.llm_backend = backend
+    version = os.environ.get("SUPERVISOR_VERSION", "v2")
+    # Before(B0/B1)는 VLM 1회만 쓰는 기준선이므로 RAG 의존성을 생성하지 않는다.
+    vector_store = None
+    if version == "v2":
+        embedder = make_embedder()
+        vector_store = SpecIndex.from_dir(
+            Path(__file__).parent / "data" / "specs", embedder
+        )
     deps = SupervisorDeps(
         fast_llm=fast_llm,
         quality_llm=quality_llm,
         mcp=mcp,
         session_store=SqliteSessionStore(),
-        version=os.environ.get("SUPERVISOR_VERSION", "v2"),
+        version=version,
+        vector_store=vector_store,
+        hitl_mode=os.environ.get("HITL_MODE", "interactive"),
+        ablation=os.environ.get("ABLATION", ""),
     )
     app.state.deps = deps
     app.state.graph = build_graph(deps) if deps.version == "v2" else None
@@ -123,15 +138,23 @@ def _metadata(result: dict, run_id: str | None) -> dict:
 
 
 @traceable(name="chat_request")
-async def _handle_chat(message: str, thread_id: str) -> tuple[dict, str | None]:
+async def _handle_chat(
+    message: str,
+    thread_id: str,
+    image_path: str | None = None,
+    item: str | None = None,
+) -> tuple[dict, str | None]:
     deps = app.state.deps
     history = deps.session_store.load(thread_id)   # Wave 12
     if deps.version == "v2":
         result = await app.state.graph.ainvoke(
             {"query": message, "thread_id": thread_id, "history": history,
-             "events": [], "cost_usd": 0.0})
+             "image_path": image_path, "item": item, "events": [],
+             "cost_usd": 0.0, "ablation": deps.ablation})
     else:
-        result = await run_v1(deps, message, thread_id, history)   # Wave 14
+        result = await run_v1(
+            deps, message, thread_id, history, image_path=image_path, item=item
+        )   # Wave 14
     deps.session_store.append(thread_id, "user", message)
     deps.session_store.append(thread_id, "assistant", result["final"])
     rt = get_current_run_tree()
@@ -140,13 +163,17 @@ async def _handle_chat(message: str, thread_id: str) -> tuple[dict, str | None]:
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    result, run_id = await _handle_chat(req.message, req.thread_id)
+    result, run_id = await _handle_chat(
+        req.message, req.thread_id, req.image_path, req.item
+    )
     return {"reply": result["final"], "events": result.get("events", []),
+            "report": result.get("report"),
             "metadata": _metadata(result, run_id)}
 
 
 @app.get("/chat/stream")
-async def chat_stream(message: str, thread_id: str = "default"):
+async def chat_stream(message: str, thread_id: str = "default",
+                      image_path: str | None = None, item: str | None = None):
     """Wave 3 — 그래프의 노드별 진행 상황을 SSE로 스트리밍.
 
     이벤트마다 'data: {json}\\n\\n' 형태로 내려보내고 마지막에 data: [DONE] 센티널을
@@ -157,20 +184,28 @@ async def chat_stream(message: str, thread_id: str = "default"):
     async def gen():
         history = deps.session_store.load(thread_id)
         if deps.version != "v2":
-            result = await run_v1(deps, message, thread_id, history)
+            result = await run_v1(
+                deps, message, thread_id, history,
+                image_path=image_path, item=item,
+            )
             for ev in result["events"]:
                 yield f"data: {json.dumps(ev, ensure_ascii=False)}\n\n"
-            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': result['final']}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': result['final'], 'report': result.get('report')}, ensure_ascii=False)}\n\n"
+            deps.session_store.append(thread_id, "user", message)
+            deps.session_store.append(thread_id, "assistant", result["final"])
         else:
             seen = 0
             final = ""
+            report = None
             last_prompt = None   # finalize까지 살아남은 최종 write/chat 호출의 실제 프롬프트
             # stream_mode를 리스트로 주면 (mode, payload) 튜플이 나온다 — "updates"는
             # 노드가 끝날 때마다의 상태 델타, "custom"은 write_node/chat_answer_node가
             # get_stream_writer()로 실행 중에 즉시 흘려보내는 토큰(AnswerToken) 이벤트다.
             async for mode, payload in app.state.graph.astream(
                     {"query": message, "thread_id": thread_id, "history": history,
-                     "events": [], "cost_usd": 0.0}, stream_mode=["updates", "custom"]):
+                     "image_path": image_path, "item": item, "events": [],
+                     "cost_usd": 0.0, "ablation": deps.ablation},
+                    stream_mode=["updates", "custom"]):
                 if mode == "custom":
                     yield f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
                     continue
@@ -182,9 +217,11 @@ async def chat_stream(message: str, thread_id: str = "default"):
                         seen = len(delta["events"])
                     if delta.get("final"):
                         final = delta["final"]
+                    if delta.get("report") is not None:
+                        report = delta["report"]
                     if delta.get("last_prompt"):
                         last_prompt = delta["last_prompt"]
-            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': final, 'prompt': last_prompt}, ensure_ascii=False)}\n\n"
+            yield f"data: {json.dumps({'type': 'FinalAnswer', 'reply': final, 'report': report, 'prompt': last_prompt}, ensure_ascii=False)}\n\n"
             deps.session_store.append(thread_id, "user", message)
             deps.session_store.append(thread_id, "assistant", final)
         yield "data: [DONE]\n\n"

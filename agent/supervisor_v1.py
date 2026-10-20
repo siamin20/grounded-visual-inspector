@@ -1,31 +1,138 @@
-"""Wave 14 — v1 (legacy) supervisor.
+"""Before 기준선: VLM 한 번으로 판정하는 선형 supervisor."""
 
-라우팅도, 게이트도, 재계획도, 검증도 없는 초기 선형 버전. SUPERVISOR_VERSION=v1로
-기동하면 이 구현이 실행된다 — 문제가 생기면 환경변수 하나로 v2에서 즉시 롤백해
-돌아오는 지점이다.
-"""
+import json
+import os
+from pathlib import Path
+
 from langsmith import traceable
 
 from .deps import SupervisorDeps
+from .nodes.common import load_lot
 from .retry import with_retry
+from .typemap import load_type_map
 
 
-@traceable(name="supervisor_v1_legacy")
-async def run_v1(deps: SupervisorDeps, query: str, thread_id: str,
-                 history: list[dict]) -> dict:
-    events = [{"type": "Legacy", "note": "v1: 라우팅/게이트/재계획/검증 없음"}]
-    # 이름 기억 같은 단순 대화도, 장애 진단도 전부 같은 선형 경로를 탄다.
-    reply, usage = await deps.fast_llm.chat(query, history)
-    if "도와드릴까요" in reply and ("장애" in query or "진단" in query):
-        data, retries = await with_retry(
-            deps.mcp.call_tool, "get_monitoring_status", {"system_name": "auth-service"})
-        reply = (f"{data['system_name']} 상태={data['status']}, "
-                 f"CPU {data['cpu_percent']}% 입니다. 자세한 절차는 담당자에게 문의하세요.")
-        events.append({"type": "TaskCompleted", "source": "monitoring",
-                       "retries": retries})
-    events.append({"type": "Finalize", "pipeline": "legacy-v1"})
-    return {"final": reply, "route": "legacy", "events": events,
-            "cost_usd": usage["usd"], "validation_attempts": 0,
-            "replan_rounds": 0, "gate_removed": 0,
-            "retry_count": next((e.get("retries", 0) for e in events
-                                 if e["type"] == "TaskCompleted"), 0)}
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _render_report(report: dict) -> str:
+    observations = "\n".join(
+        f"- {value['text']} (`{value['source_call_id']}`)"
+        for value in report["observations"]
+    ) or "- 관찰 기록 없음"
+    return (
+        "# 제품 검사 보고서\n\n"
+        f"- 판정: **{report['verdict']}**\n"
+        f"- 결함 유형: {report['defect_type'] or '없음'}\n"
+        f"- 확신도: {report['confidence']}\n\n"
+        f"## 관찰 근거\n{observations}\n\n"
+        f"- 조치: {', '.join(report['actions'])}\n"
+        f"- 로트: `{json.dumps(report['lot'], ensure_ascii=False)}`\n\n"
+        f"{report['summary']}"
+    )
+
+
+@traceable(name="supervisor_v1_baseline")
+async def run_v1(
+    deps: SupervisorDeps,
+    message: str,
+    thread_id: str,
+    history: list[dict],
+    image_path: str | None = None,
+    item: str | None = None,
+) -> dict:
+    del thread_id
+    type_map = load_type_map()
+    if not image_path:
+        reply, usage = await deps.fast_llm.chat(message, history)
+        return {
+            "final": reply,
+            "route": "chat",
+            "events": [
+                {"type": "RouteDecided", "route": "chat"},
+                {"type": "Finalize", "pipeline": "baseline-v1"},
+            ],
+            "cost_usd": usage.get("usd", 0.0),
+            "validation_attempts": 0,
+            "replan_rounds": 0,
+            "gate_removed": 0,
+            "retry_count": 0,
+        }
+    if item not in type_map:
+        reply = f"품목을 선택해 주세요({'/'.join(type_map)})"
+        return {
+            "final": reply,
+            "route": "needs_item",
+            "events": [
+                {"type": "RouteDecided", "route": "needs_item"},
+                {"type": "Finalize", "pipeline": "baseline-v1"},
+            ],
+            "cost_usd": 0.0,
+            "validation_attempts": 0,
+            "replan_rounds": 0,
+            "gate_removed": 0,
+            "retry_count": 0,
+        }
+
+    defect_types = [name for name in type_map[item] if name != "good"]
+    context = f"가능한 결함 유형: {', '.join(defect_types)}"
+    if os.environ.get("BASELINE_MODE", "B0").upper() == "B1":
+        resource_server, uri_template = await deps.mcp.find_resource_template("get_spec")
+        spec_text = await deps.mcp.read_resource(
+            uri_template.format(item=item), server=resource_server
+        )
+        context = f"{context}\n\n{spec_text}"
+
+    reference = ROOT / "data" / "mvtec" / item / "train" / "good" / "000.png"
+    tool_server = await deps.mcp.find_tool("inspect_image")
+    result, retries = await with_retry(
+        deps.mcp.call_tool,
+        "inspect_image",
+        {
+            "image_path": image_path,
+            "item": item,
+            "region": "full",
+            "style": "baseline",
+            "flip": False,
+            "reference_path": str(reference) if reference.exists() else None,
+            "model_role": "observer",
+            "extra_context": context,
+        },
+        server=tool_server,
+    )
+    verdict = result.get("verdict") or (
+        "REJECT" if result.get("anomaly_seen") else "PASS"
+    )
+    defect_type = result.get("defect_type") if verdict == "REJECT" else None
+    observations = result.get("observations") or [result.get("text", "판독 불가")]
+    report = {
+        "verdict": verdict,
+        "defect_type": defect_type,
+        "confidence": "high",
+        "observations": [
+            {"text": text, "source_call_id": "baseline-full"}
+            for text in observations
+        ],
+        "spec_clauses": [],
+        "actions": ["통과"] if verdict == "PASS" else ["재작업"],
+        "lot": load_lot(image_path),
+        "summary": "단일 VLM 판독을 Before 기준선 보고서로 정리했습니다.",
+    }
+    events = [
+        {"type": "RouteDecided", "route": "inspection"},
+        {"type": "ObservationReady", "region": "full", "call_id": "baseline-full"},
+        {"type": "AnalysisDecided", "verdict": verdict, "confidence": "high"},
+        {"type": "DraftWritten", "attempt": 1},
+        {"type": "Finalize", "pipeline": "baseline-v1"},
+    ]
+    return {
+        "final": _render_report(report),
+        "route": "inspection",
+        "events": events,
+        "report": report,
+        "cost_usd": float(result.get("usd", 0.0)),
+        "validation_attempts": 0,
+        "replan_rounds": 0,
+        "gate_removed": 0,
+        "retry_count": retries,
+    }
