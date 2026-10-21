@@ -23,6 +23,14 @@ from dotenv import load_dotenv
 
 load_dotenv()   # LANGCHAIN_TRACING_V2 / API_KEY / PROJECT — import보다 먼저
 
+# fake 조합은 네트워크 없이 재현 가능해야 하므로 로컬 .env의 추적 설정도 끈다.
+_llm_backend = os.environ.get("LLM_BACKEND", "fake").strip().lower()
+_vlm_backend = os.environ.get("VLM_BACKEND", _llm_backend).strip().lower()
+_embed_backend = os.environ.get("EMBED_BACKEND", _llm_backend).strip().lower()
+if {_llm_backend, _vlm_backend, _embed_backend} == {"fake"}:
+    os.environ["LANGCHAIN_TRACING_V2"] = "false"
+    os.environ["LANGSMITH_TRACING"] = "false"
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from langgraph.checkpoint.sqlite.aio import AsyncSqliteSaver
@@ -32,13 +40,18 @@ from langsmith.run_helpers import get_current_run_tree
 from PIL import Image, UnidentifiedImageError
 from pydantic import BaseModel
 
-from agent.deps import SupervisorDeps
+from agent.deps import (
+    SupervisorDeps,
+    validate_ablation,
+    validate_hitl_mode,
+    validate_supervisor_version,
+)
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.graph import build_graph
 from agent.mcp_client import MCPClient
 from agent.rag import SpecIndex, make_embedder
 from agent.session_store import SqliteSessionStore
-from agent.supervisor_v1 import run_v1
+from agent.supervisor_v1 import build_v1_graph, validate_baseline_mode
 from agent.typemap import load_type_map
 
 CREATION_COUNT = 0   # Wave 1 — 프로세스 내 Agent 번들 생성 횟수 (항상 1이어야 정상)
@@ -58,6 +71,7 @@ class ChatRequest(BaseModel):   # Wave 1 — Pydantic 요청 검증
 
 class ResumeRequest(BaseModel):
     thread_id: str
+    approval_id: str
     decision: Literal["approve", "reject"]
     note: str = ""
 
@@ -89,6 +103,16 @@ def _build_llms():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global CREATION_COUNT
+    version = validate_supervisor_version(
+        os.environ.get("SUPERVISOR_VERSION", "v2")
+    )
+    hitl_mode = validate_hitl_mode(os.environ.get("HITL_MODE", "interactive"))
+    ablation = validate_ablation(os.environ.get("ABLATION", ""))
+    baseline_mode = None
+    if version == "v1":
+        baseline_mode = validate_baseline_mode(
+            os.environ.get("BASELINE_MODE", "B0")
+        )
     CREATION_COUNT += 1
     mcp = MCPClient()
     await mcp.start()   # Wave 2 — 각 MCP subprocess 연결은 프로세스 수명 동안 1회 생성
@@ -103,23 +127,22 @@ async def lifespan(app: FastAPI):
         app.state.embed_backend = (
             os.environ.get("EMBED_BACKEND") or backend
         ).strip().lower()
-        version = os.environ.get("SUPERVISOR_VERSION", "v2")
-        # Before(B0/B1)는 VLM 1회만 쓰는 기준선이므로 RAG·checkpointer를 만들지 않는다.
+        # Before(B0/B1)는 RAG를 사용하지 않지만 ABSTAIN HITL은
+        # 재시작 후에도 재개해야 하므로 모든 버전이 checkpointer를 공유한다.
         vector_store = None
-        checkpointer = None
         if version == "v2":
             embedder = make_embedder()
             vector_store = SpecIndex.from_dir(ROOT / "data" / "specs", embedder)
-            checkpoint_path = Path(
-                os.environ.get("CHECKPOINT_DB_PATH", str(CHECKPOINT_DB_PATH))
-            )
-            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
-            # 3.1.2의 from_conn_string은 async context manager이며, 그래프와
-            # SQLite 연결의 수명을 FastAPI lifespan과 같게 맞춘다.
-            checkpointer_context = AsyncSqliteSaver.from_conn_string(
-                str(checkpoint_path)
-            )
-            checkpointer = await checkpointer_context.__aenter__()
+        checkpoint_path = Path(
+            os.environ.get("CHECKPOINT_DB_PATH", str(CHECKPOINT_DB_PATH))
+        )
+        checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+        # 3.1.2의 from_conn_string은 async context manager이며, 그래프와
+        # SQLite 연결의 수명을 FastAPI lifespan과 같게 맞춘다.
+        checkpointer_context = AsyncSqliteSaver.from_conn_string(
+            str(checkpoint_path)
+        )
+        checkpointer = await checkpointer_context.__aenter__()
         deps = SupervisorDeps(
             fast_llm=fast_llm,
             quality_llm=quality_llm,
@@ -128,14 +151,21 @@ async def lifespan(app: FastAPI):
             version=version,
             vector_store=vector_store,
             checkpointer=checkpointer,
-            hitl_mode=os.environ.get("HITL_MODE", "interactive"),
-            ablation=os.environ.get("ABLATION", ""),
+            hitl_mode=hitl_mode,
+            ablation=ablation,
         )
         app.state.deps = deps
         app.state.checkpointer = checkpointer
+        app.state.checkpoint_namespace = (
+            version if baseline_mode is None else f"{version}:{baseline_mode}"
+        )
+        # 같은 실행 조건·thread의 checkpoint를 동시에 갱신하지 않는다.
+        # SSE 응답은 endpoint 반환 뒤 실행되므로 스트림 종료까지 예약을 유지한다.
+        app.state.active_thread_requests = set()
         app.state.graph = (
             build_graph(deps, checkpointer=checkpointer)
-            if deps.version == "v2" else None
+            if deps.version == "v2"
+            else build_v1_graph(deps, checkpointer=checkpointer)
         )
         app.state.instance_id = id(deps)
         yield
@@ -199,6 +229,9 @@ def _metadata(result: dict, run_id: str | None) -> dict:
         "verdict": result.get("verdict", report.get("verdict")),
         "defect_type": result.get("defect_type", report.get("defect_type")),
         "confidence": result.get("confidence", report.get("confidence")),
+        "abstain_reason": result.get(
+            "abstain_reason", report.get("abstain_reason")
+        ),
         "approval_required": bool(
             approval.get("required") if isinstance(approval, dict) else False
         ) or bool(result.get("__interrupt__")),
@@ -213,8 +246,55 @@ def _metadata(result: dict, run_id: str | None) -> dict:
 
 
 def _graph_config(thread_id: str) -> dict:
-    """LangGraph checkpoint의 키를 모든 v2 호출에서 동일하게 쓴다."""
-    return {"configurable": {"thread_id": thread_id}}
+    """pipeline 버전별 저장용 thread ID를 구성한다."""
+    return {
+        "configurable": {
+            "thread_id": f"{app.state.checkpoint_namespace}:{thread_id}",
+        }
+    }
+
+
+async def _has_pending_interrupt(thread_id: str) -> bool:
+    """동일 thread에 사람 승인 대기 중인 요청이 있는지 확인한다."""
+    snapshot = await app.state.graph.aget_state(_graph_config(thread_id))
+    return any(getattr(task, "interrupts", ()) for task in snapshot.tasks)
+
+
+async def _ensure_thread_is_not_paused(thread_id: str) -> None:
+    """사람 승인을 새 입력으로 덮어쓰는 것을 막는다."""
+    if await _has_pending_interrupt(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="사람 승인 대기 중인 thread입니다. /chat/resume을 사용하세요.",
+        )
+
+
+def _reserve_thread(thread_id: str) -> str:
+    """namespace·thread별 요청을 하나만 실행하도록 원자적으로 예약한다."""
+    key = f"{app.state.checkpoint_namespace}:{thread_id}"
+    active = app.state.active_thread_requests
+    if key in active:
+        raise HTTPException(
+            status_code=409,
+            detail="같은 thread의 요청이 이미 실행 중입니다.",
+        )
+    # 이벤트 루프는 await 지점에서만 다른 task로 전환하므로 검사와 추가가 한 단위다.
+    active.add(key)
+    return key
+
+
+def _release_thread(key: str) -> None:
+    """완료·예외·클라이언트 취소 모두에서 single-flight 예약을 해제한다."""
+    app.state.active_thread_requests.discard(key)
+
+
+async def _reserved_stream(source: AsyncIterator[str], key: str) -> AsyncIterator[str]:
+    """SSE iterator가 자연 종료되거나 취소될 때까지 thread 예약을 유지한다."""
+    try:
+        async for chunk in source:
+            yield chunk
+    finally:
+        _release_thread(key)
 
 
 def _initial_state(
@@ -256,9 +336,12 @@ def _initial_state(
         "verdict": "",
         "defect_type": None,
         "confidence": "",
+        "abstain_reason": None,
         "report": {},
         "approval": {},
+        "reapproval_required": False,
         "validation_errors": [],
+        "pre_validation_snapshot": {},
         "events": [],
         "cost_usd": 0.0,
         "tokens": 0,
@@ -296,19 +379,15 @@ async def _handle_chat(
     item: str | None = None,
 ) -> tuple[dict, str | None]:
     deps = app.state.deps
+    await _ensure_thread_is_not_paused(thread_id)
     history = deps.session_store.load(thread_id)   # Wave 12
-    if deps.version == "v2":
-        result = await app.state.graph.ainvoke(
-            _initial_state(
-                message, thread_id, history, image_path, item, deps.ablation
-            ),
-            config=_graph_config(thread_id),
-            durability="sync",
-        )
-    else:
-        result = await run_v1(
-            deps, message, thread_id, history, image_path=image_path, item=item
-        )   # Wave 14
+    result = await app.state.graph.ainvoke(
+        _initial_state(
+            message, thread_id, history, image_path, item, deps.ablation
+        ),
+        config=_graph_config(thread_id),
+        durability="sync",
+    )
     # interrupt 중인 요청은 최종 답이 없으므로 resume 완료 시점에 저장한다.
     if result.get("final"):
         _save_session(deps, thread_id, message, image_path, result["final"])
@@ -318,12 +397,23 @@ async def _handle_chat(
 
 @app.post("/chat")
 async def chat(req: ChatRequest):
-    result, run_id = await _handle_chat(
-        req.message, req.thread_id, req.image_path, req.item
+    thread_id = _validated_thread_id(req.thread_id)
+    reservation = _reserve_thread(thread_id)
+    try:
+        result, run_id = await _handle_chat(
+            req.message, thread_id, req.image_path, req.item
+        )
+    finally:
+        _release_thread(reservation)
+    raw_interrupt = result.get("__interrupt__")
+    approval_id = (
+        _interrupt_event(raw_interrupt, result.get("report")).get("approval_id")
+        if raw_interrupt else None
     )
     return {"reply": result.get("final", ""), "events": result.get("events", []),
             "report": result.get("report"),
-            "paused": bool(result.get("__interrupt__")),
+            "paused": bool(raw_interrupt),
+            "approval_id": approval_id,
             "metadata": _metadata(result, run_id)}
 
 
@@ -340,19 +430,33 @@ def _interrupt_event(raw: Any, report: dict | None) -> dict:
     event = dict(value) if isinstance(value, dict) else {}
     event["type"] = "ApprovalRequired"
     event["required"] = True
+    interrupt_id = getattr(first, "id", None)
+    if isinstance(interrupt_id, str) and interrupt_id:
+        event["approval_id"] = interrupt_id
     if not isinstance(event.get("report"), dict):
         event["report"] = report or {}
     return event
 
 
-async def _stream_v2(
+def _pending_interrupt_ids(snapshot: Any) -> tuple[str, ...]:
+    """현재 checkpoint에서 재개 가능한 interrupt ID만 추출한다."""
+    interrupt_ids: list[str] = []
+    for task in snapshot.tasks:
+        for pending in getattr(task, "interrupts", ()):
+            interrupt_id = getattr(pending, "id", None)
+            if isinstance(interrupt_id, str) and interrupt_id:
+                interrupt_ids.append(interrupt_id)
+    return tuple(interrupt_ids)
+
+
+async def _stream_graph(
     graph_input: dict | Command,
     *,
     thread_id: str,
     session_context: dict,
     seen: int = 0,
 ) -> AsyncIterator[str]:
-    """v2 신규 요청과 resume가 같은 SSE 규칙을 쓰게 한다."""
+    """v1/v2 신규 요청과 resume가 같은 SSE 규칙을 쓰게 한다."""
     deps = app.state.deps
     final = str(session_context.get("final") or "")
     report = session_context.get("report")
@@ -422,39 +526,37 @@ async def _stream_request(
 ) -> AsyncIterator[str]:
     deps = app.state.deps
     history = deps.session_store.load(thread_id)
-    if deps.version != "v2":
-        result = await run_v1(
-            deps, message, thread_id, history, image_path=image_path, item=item
-        )
-        for value in result["events"]:
-            yield _sse(value)
-        yield _sse(
-            {
-                "type": "FinalAnswer",
-                "reply": result["final"],
-                "report": result.get("report"),
-            }
-        )
-        _save_session(deps, thread_id, message, image_path, result["final"])
-        yield _sse("[DONE]")
-        return
-
     initial = _initial_state(
         message, thread_id, history, image_path, item, deps.ablation
     )
-    async for chunk in _stream_v2(
+    async for chunk in _stream_graph(
         initial, thread_id=thread_id, session_context=initial
     ):
         yield chunk
 
 
 def _validated_thread_id(thread_id: str | None, session_id: str | None = None) -> str:
+    if thread_id == "" or session_id == "":
+        raise HTTPException(status_code=422, detail="thread_id 형식이 올바르지 않습니다.")
     if thread_id and session_id and thread_id != session_id:
         raise HTTPException(status_code=422, detail="thread_id와 session_id가 다릅니다.")
     value = thread_id or session_id or "default"
     if not _THREAD_ID.fullmatch(value) or value in {".", ".."}:
         raise HTTPException(status_code=422, detail="thread_id 형식이 올바르지 않습니다.")
     return value
+
+
+def _validated_inspect_thread_id(
+    thread_id: str | None,
+    session_id: str | None,
+) -> str:
+    """업로드는 명시적 thread ID 또는 호환용 session ID를 요구한다."""
+    if thread_id is None and session_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="thread_id 또는 session_id가 필요합니다.",
+        )
+    return _validated_thread_id(thread_id, session_id)
 
 
 def _convert_to_png(content: bytes, destination: Path) -> None:
@@ -464,6 +566,10 @@ def _convert_to_png(content: bytes, destination: Path) -> None:
             source.verify()
         with Image.open(io.BytesIO(content)) as source:
             source.load()
+            detected_format = source.format
+            if detected_format == "PNG":
+                destination.write_bytes(content)
+                return
             has_alpha = source.mode in {"RGBA", "LA"} or "transparency" in source.info
             prepared = source.convert("RGBA" if has_alpha else "RGB")
             prepared.save(destination, format="PNG")
@@ -505,8 +611,17 @@ async def chat_stream(
 ):
     """Wave 3 — 그래프 진행 상황을 SSE 규약으로 내보낸다."""
     thread_id = _validated_thread_id(thread_id)
+    reservation = _reserve_thread(thread_id)
+    try:
+        await _ensure_thread_is_not_paused(thread_id)
+    except BaseException:
+        _release_thread(reservation)
+        raise
     return StreamingResponse(
-        _stream_request(message, thread_id, image_path, item),
+        _reserved_stream(
+            _stream_request(message, thread_id, image_path, item),
+            reservation,
+        ),
         media_type="text/event-stream",
     )
 
@@ -519,12 +634,21 @@ async def inspect_image(
     session_id: str | None = Form(None),
 ):
     """업로드를 검증해 UUID PNG로 저장한 뒤 검사를 스트리밍한다."""
-    resolved_thread_id = _validated_thread_id(thread_id, session_id)
+    resolved_thread_id = _validated_inspect_thread_id(thread_id, session_id)
     if item not in load_type_map():
         raise HTTPException(status_code=422, detail="지원하지 않는 품목입니다.")
-    image_path = await _save_uploaded_png(file, resolved_thread_id)
+    reservation = _reserve_thread(resolved_thread_id)
+    try:
+        await _ensure_thread_is_not_paused(resolved_thread_id)
+        image_path = await _save_uploaded_png(file, resolved_thread_id)
+    except BaseException:
+        _release_thread(reservation)
+        raise
     return StreamingResponse(
-        _stream_request("검사해줘", resolved_thread_id, str(image_path), item),
+        _reserved_stream(
+            _stream_request("검사해줘", resolved_thread_id, str(image_path), item),
+            reservation,
+        ),
         media_type="text/event-stream",
     )
 
@@ -532,26 +656,37 @@ async def inspect_image(
 @app.post("/chat/resume")
 async def chat_resume(req: ResumeRequest):
     """저장된 interrupt를 동일 thread_id에서 이어서 실행한다."""
-    if app.state.deps.version != "v2":
-        raise HTTPException(status_code=409, detail="v2 그래프에서만 재개할 수 있습니다.")
     thread_id = _validated_thread_id(req.thread_id)
-    config = _graph_config(thread_id)
-    snapshot = await app.state.graph.aget_state(config)
-    pending_interrupt = any(
-        getattr(task, "interrupts", ()) for task in snapshot.tasks
-    )
-    if not pending_interrupt:
-        raise HTTPException(status_code=409, detail="재개할 중단 상태가 없습니다.")
-    context = dict(snapshot.values)
-    events = context.get("events")
-    seen = len(events) if isinstance(events, list) else 0
-    command = Command(resume={"decision": req.decision, "note": req.note})
+    reservation = _reserve_thread(thread_id)
+    try:
+        config = _graph_config(thread_id)
+        snapshot = await app.state.graph.aget_state(config)
+        pending_interrupt_ids = _pending_interrupt_ids(snapshot)
+        if not pending_interrupt_ids:
+            raise HTTPException(status_code=409, detail="재개할 중단 상태가 없습니다.")
+        if pending_interrupt_ids != (req.approval_id,):
+            raise HTTPException(
+                status_code=409,
+                detail="approval_id가 현재 재개 대기 상태와 일치하지 않습니다.",
+            )
+        context = dict(snapshot.values)
+        events = context.get("events")
+        seen = len(events) if isinstance(events, list) else 0
+        command = Command(resume={
+            req.approval_id: {"decision": req.decision, "note": req.note}
+        })
+    except BaseException:
+        _release_thread(reservation)
+        raise
     return StreamingResponse(
-        _stream_v2(
-            command,
-            thread_id=thread_id,
-            session_context=context,
-            seen=seen,
+        _reserved_stream(
+            _stream_graph(
+                command,
+                thread_id=thread_id,
+                session_context=context,
+                seen=seen,
+            ),
+            reservation,
         ),
         media_type="text/event-stream",
     )

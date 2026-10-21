@@ -8,6 +8,48 @@ from dataclasses import dataclass
 from typing import Any
 
 
+SUPERVISOR_VERSIONS = frozenset({"v1", "v2"})
+HITL_MODES = frozenset({"interactive", "auto_approve", "auto_reject"})
+ABLATION_MODES = frozenset({"", "no_cross", "no_crops", "no_validate"})
+
+
+def validate_supervisor_version(value: Any) -> str:
+    """Supervisor 선택을 표준화하고 알 수 없는 값은 즉시 거부한다."""
+    normalized = str(value).strip().lower()
+    if normalized not in SUPERVISOR_VERSIONS:
+        allowed = "|".join(sorted(SUPERVISOR_VERSIONS))
+        raise ValueError(
+            f"지원하지 않는 SUPERVISOR_VERSION입니다: {value!r} "
+            f"(허용: {allowed})"
+        )
+    return normalized
+
+
+def validate_hitl_mode(value: Any) -> str:
+    """HITL 모드를 표준화하고 fail-open이 될 오타를 거부한다."""
+    normalized = str(value).strip().lower()
+    if normalized not in HITL_MODES:
+        allowed = "|".join(sorted(HITL_MODES))
+        raise ValueError(
+            f"지원하지 않는 HITL_MODE입니다: {value!r} "
+            f"(허용: {allowed})"
+        )
+    return normalized
+
+
+def validate_ablation(value: Any) -> str:
+    """Ablation 오타가 전체 조건으로 묵시적 실행되지 않게 한다."""
+
+    normalized = str(value).strip().lower()
+    if normalized not in ABLATION_MODES:
+        allowed = "|".join(mode or "(empty)" for mode in sorted(ABLATION_MODES))
+        raise ValueError(
+            f"지원하지 않는 ABLATION입니다: {value!r} "
+            f"(허용: {allowed})"
+        )
+    return normalized
+
+
 @dataclass
 class SupervisorDeps:
     fast_llm: Any        # Wave 10a — 분류/계획 등 짧은 단계용 저비용 모델
@@ -19,3 +61,9 @@ class SupervisorDeps:
     checkpointer: Any = None
     hitl_mode: str = "interactive"
     ablation: str = ""
+
+    def __post_init__(self) -> None:
+        """잘못된 실행 모드가 그래프까지 전파되기 전에 중단한다."""
+        self.version = validate_supervisor_version(self.version)
+        self.hitl_mode = validate_hitl_mode(self.hitl_mode)
+        self.ablation = validate_ablation(self.ablation)

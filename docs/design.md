@@ -1,7 +1,7 @@
 # 설계서 — 이미지 기반 제품 결함 판정 및 근거 검증 멀티에이전트
 
-작성일 2026-10-20 (Day1, v2.1). 과제 유형: 2번 신규 프로젝트 (Base AI Agent 구조 이식).
-v1 대비 변경: research를 2단계 구조로 정정, 환각률 독립 측정, McNemar 검정, 실험 예산 축소, 이미지 입력 경로·HITL 재개 설계 추가, ADR·Base 패턴 유지표 추가.
+작성일 2026-10-20, 최종 갱신 2026-10-21 (v2.2). 과제 유형: 2번 신규 프로젝트 (Base AI Agent 구조 이식).
+v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평가 계약을 사전 고정했다.
 
 ---
 
@@ -58,17 +58,22 @@ v1 대비 변경: research를 2단계 구조로 정정, 환각률 독립 측정,
 
 ## 2. 가설 (측정 가능한 형태로 사전 등록)
 
-같은 held-out 이미지를 Before와 After에 모두 넣는 짝지은 설계이므로 검정은 McNemar(양측, α=0.05)로 한다. 신뢰구간은 효과 크기 서술용으로 함께 적는다.
+같은 held-out ID를 유지하되 가설의 주 지표와 같은 통계량을 검정한다.
+H1은 주 확증 가설, H2·H3은 보조 가설, H4는 탐색적 보정 진단으로
+계층화한다. H2·H3의 p-value는 다중성 보정 없이 각각 보고하므로
+독립적인 확정 결론으로 일반화하지 않는다. 신뢰구간은 효과 크기 서술용이다.
 
 | ID | 가설 | 지표 | 판정 기준 |
 |---|---|---|---|
-| H1 | 에이전트 레이어는 VLM 단독보다 결함 유무 판정이 정확하다 | balanced accuracy, FNR(결함 미검), FPR(정상 오탐) | McNemar p<0.05 이고 balanced accuracy 상승 |
-| H2 | 기준서 기반 판정은 결함 유형 분류가 정확하다 | 유형 macro-F1 (MVTec 폴더 라벨 기준) | B0 대비 상승, McNemar p<0.05 |
-| H3 | validate는 보고서 환각을 줄인다 | 환각률 (5.3의 독립 측정) | After ≤ 5%, Before 대비 감소 |
-| H4 | 확신 낮음 플래그는 실제 오답을 선별한다 | 플래그 건 오답률 vs 전체 오답률 | 플래그 내 오답률 ≥ 2× 전체 |
+| H1 | 전체 에이전트 A는 VLM 단독 B0보다 결함 유무 판정이 정확하다 | balanced accuracy, FNR, FPR | 정상/결함 층화 paired permutation 양측 p<0.05 이고 ΔBA(A−B0)>0 |
+| H2 | 전체 에이전트 A는 B0보다 결함 유형 분류가 정확하다 | 유형 macro-F1 (MVTec 폴더 라벨 기준) | 진실 유형 층화 paired permutation 양측 p<0.05 이고 Δmacro-F1(A−B0)>0 |
+| H3 | validate 반려·재작성은 동일 A 실행의 보고서 환각을 줄인다 | 동일 20 ID의 validate 직전/최종 보고서 환각 포함률 | 관측 After ≤5%, Before보다 낮음, exact McNemar p<0.05 |
+| H4 | `confidence=low`는 high보다 자동 판정 오답을 농축한다 | low PASS/REJECT 오답률 vs high PASS/REJECT 오답률 | 각 그룹 20건 이상에서 low 오답률이 high보다 엄격히 높고 ≥2× |
 | C1 | 비용: 호출 수 증가로 지연·토큰이 늘어난다 | p50/p95 지연, 토큰, USD | 실측 보고 (트레이드오프) |
 
 사전 등록은 기준을 먼저 적어두고 결과가 못 미치면 "효과 미입증"으로 그대로 발표한다는 뜻이다. 결과를 본 뒤 기준을 바꾸지 않는다.
+R1 계약상 `ABSTAIN`은 모든 주 성능 지표와 McNemar 정오표에서 오답으로 남기며,
+선택적 지표에만 제외할 수 있다. coverage 없이 선택적 정확도만 발표하지 않는다.
 
 ---
 
@@ -88,8 +93,8 @@ v1 대비 변경: research를 2단계 구조로 정정, 환각률 독립 측정,
 | hazelnut | good, crack, cut, hole, print | 없음 (시간 부족 시 이 품목부터 제외) |
 
 - 유형 어휘 매핑 표 `eval/type_map.json`: 에이전트 출력 유형(한국어) ↔ MVTec 폴더명. 채점 전에 고정.
-- 샘플링: 품목당 good 20장 + 결함 유형별 8장 → 4품목 192장 (screw 52, bottle 44, metal_nut 44, hazelnut 52). hazelnut을 빼면 140장. 정상:결함 비율이 1:2라 정확도 대신 balanced accuracy와 F1을 주 지표로 쓴다. 난수 시드 고정, 파일 목록을 `eval/dataset.json`에 저장.
-- dev / held-out 분리: 품목·유형별 층화로 약 30%(60장)는 프롬프트·임계값·기준서 조정에 쓰고 나머지 약 130장은 최종 보고에만 쓰며 개발 중 열어보지 않는다. 튜닝 누출을 막기 위해서다. 아래에서 held-out을 120장으로 적은 곳은 이 수치의 근사다.
+- 샘플링: 품목당 good 20장 + 결함 유형별 8장 → 4품목 192장 (screw 52, bottle 44, metal_nut 44, hazelnut 52). hazelnut을 빼면 140장. 정상:결함 비율이 1:2라 단순 정확도 대신 전체 ID를 분모로 한 balanced accuracy와 정상·결함 실패율을 주 지표로 쓴다. PASS/REJECT 자동 판정분의 F1은 `selective_f1`로 구분해 coverage와 함께만 보고한다. 난수 시드 고정, 파일 목록을 `eval/dataset.json`에 저장.
+- dev / held-out 분리: 품목·유형별 층화 결과 dev 52장과 held-out 140장으로 고정됐다. dev는 프롬프트·임계값 조정에 쓰고 held-out은 최종 보고에만 쓰며 개발 중 열어보지 않는다. 튜닝 누출을 막기 위해서다.
 
 ### 3.2 참고 문서 (직접 작성하지만 채점 정답으로는 쓰지 않음)
 기준서와 조치 가이드는 공개 데이터에 없으므로 직접 쓴다. 이 문서들은 에이전트가 판정할 때 참고하는 자료일 뿐이고 정확도 채점의 정답은 3.1의 MVTec 라벨이다. 내가 쓴 문서로 내가 채점하는 순환을 피하기 위한 구분이다.
@@ -125,22 +130,44 @@ research는 2단계다. Spec-Judge가 Observer의 관찰 문장을 쿼리로 쓰
 - plan: MCP Prompt `inspection_prompt(item, lot)` 조회 → tasks `[observe, cross_check, spec_judge]`.
 - gate: 코드 규칙으로 불필요 task 제거. 품목(item)은 필수 입력이다(UI 드롭다운, 배치는 경로에서). VLM에게 품목까지 맞히게 하면 실패 지점이 하나 더 생기므로 범위에서 뺀다. 품목이 없으면 gate가 사용자에게 되묻고 종료.
 - research — compiled subgraph 3개
-  1. Observer (1단계): MCP Tool `inspect_image(path, region="full")` 1회 + 4분할 크롭 4회 병렬. 출력에는 관찰 사실만(위치·크기·색·형태) 담는다. "불량/합격" 단어 금지(프롬프트 + 후처리 필터). 자유 문장과 함께 구조화 필드 `{anomaly_seen: bool, regions: [tl|tr|bl|br|center], features: [...]}`를 반드시 채운다.
+  1. Observer (1단계): MCP Tool `inspect_image(path, region="full")` 1회 + 4분할 크롭 4회 병렬. 출력에는 관찰 사실만(위치·크기·색·형태) 담는다. "불량/합격" 단어 금지(프롬프트 + 후처리 필터). 자유 문장과 함께 구조화 필드 `{anomaly_seen: bool|null, regions: [tl|tr|bl|br|center], features: [...]}`를 반드시 채운다. `null`은 정상 관찰이 아니라 판독 불가다.
   2. Cross-Checker (1단계, Observer와 병렬): 같은 이미지를 좌우 반전해 체크리스트형 프롬프트로 재판독. openai 백엔드에서는 Observer가 `gpt-4o-mini`, Cross-Checker가 `gpt-4o`로 모델도 다르게 한다. ollama 백엔드는 모델이 하나라 반전+프롬프트 차이만 두며, 이 경우 독립성이 약하다는 점을 결과에 적는다. 출력은 같은 구조화 필드 `{anomaly_seen, regions}`(반전 좌표는 원좌표로 되돌려 기록).
   3. Spec-Judge (2단계): Observer 관찰 문장을 쿼리로 기준서 RAG top-3 조항 검색 → 조항별 충족/위반 판정 + 결함 유형 후보.
-- replan_check: Observer가 "판독 불가/해상도 부족"을 반환하면 추가 크롭 task 1회.
-- analysis(코드 규칙, LLM 아님): 합의 규칙. "일치"는 `anomaly_seen`이 같고, 둘 다 true일 때 `regions` 교집합이 비어 있지 않은 경우로 정의한다(자유 문장은 비교하지 않는다).
-  - Observer·Cross-Checker 일치 + Spec-Judge 위반 조항 있음 → `REJECT, confidence=high`
-  - 둘 일치 + 위반 없음 → `PASS, confidence=high`
-  - 불일치 → `confidence=low` → HITL 대상
-- write: 보고서 생성. 스키마 강제: `{verdict, defect_type, confidence, observations[{text, source_call_id}], spec_clauses[ids], actions[], lot}`.
-- HITL(interrupt): `verdict=REJECT and action in {폐기, 라인정지}` 또는 `confidence=low`일 때 LangGraph `interrupt()`로 중단. 4.5 참조.
+- replan_check: 아래 Observer 집계가 `O?`일 때만 center 크롭 task를 1회 추가한다. 단일 crop의 판독 실패만으로 재계획하지 않는다. center 이후에도 `O?`이면 analysis가 `ABSTAIN`한다.
+- analysis(코드 규칙, LLM 아님): After(v2)의 판독 가능 여부·합의·근거를 아래 R1 계약으로 조합한다. B0/B1은 RAG가 없는 비교군이므로 이 표의 `V+` 요건을 적용하지 않고, VLM이 판독하지 못했거나 출력이 무효일 때만 ABSTAIN한다.
+  - 판독 가능한 관찰은 `anomaly_seen`이 실제 bool이고 text가 `판독 불가`가 아닌 경우다.
+  - `O+`: 판독 가능한 `true`가 1개 이상. `O-`: `true`가 없고 `full=false` 또는 서로 다른 사분면 3개 이상이 `false`. 나머지는 `O?`다. 3개 사분면은 라벨을 보지 않고 정한 75% 공간 커버리지 경계다. center의 `false`는 정상 커버리지를 대신하지 않지만 `true`는 `O+` 증거다.
+  - 이상 영역 합집합에는 `anomaly_seen=true`인 관찰의 region만 넣는다. 정상·판독 불가 관찰의 region은 양성 합의에 쓰지 않는다.
+  - Cross-Checker는 `C+|C-|C?`로 구분한다. 빈 값·`null`은 운영 중 `C?`, 명시적 `no_cross` ablation만 `C-skip`이다.
+  - `V+`는 실제 기준서에 있는 위반 조항 1개 이상과 type_map의 결함 유형이 함께 검증된 경우다. 빈 판정은 `V0`, 형식 오류·교정 불가능한 모순은 `V?`다.
+
+| Observer | Cross | Spec-Judge | 결과 |
+|---|---|---|---|
+| 임의 | 임의 | `V?` | `ABSTAIN/low`, `validation_failure` |
+| `O+` | `C+` | `V+` | 양성 region이 겹치면 `REJECT/high`, 아니면 `REJECT/low` |
+| `O+` | `C-|C?` | `V+` | `REJECT/low` |
+| `O?` | `C+` | `V+` | `REJECT/low` |
+| `O-` | `C+` | `V+` | `REJECT/low` |
+| 시각 양성(`O+` 또는 `C+`) | 임의 | `V0` | `ABSTAIN/low`, `ungrounded_anomaly` |
+| 시각 양성 없음 | 임의 | `V+` | `ABSTAIN/low`, `evidence_conflict` |
+| `O-` | `C-` | `V0` | `PASS/high` |
+| `O-` | `C?` | `V0` | `PASS/low` |
+| `O?` | `C-|C?` | `V0` | `ABSTAIN/low`, `insufficient_visual_evidence` |
+| `O+` / `O-` | `C-skip` | 각각 `V+` / `V0` | ablation 표식을 남기고 각각 `REJECT/high` / `PASS/high` |
+| 그 밖의 `C-skip` 조합 | `C-skip` | 임의 | `ABSTAIN/low` |
+
+  `ABSTAIN`은 결함 판정도 합격 판정도 아니다. `defect_type=null`,
+  `spec_clauses=[]`, `actions=["재검사"]`이며 `abstain_reason`은
+  `insufficient_visual_evidence|ungrounded_anomaly|evidence_conflict|validation_failure`
+  중 하나다.
+- write: 보고서 생성. 스키마 강제: `{verdict, defect_type, confidence, abstain_reason, observations[{text, source_call_id}], spec_clauses[ids], actions[], lot, summary}`. PASS는 `통과`만, REJECT는 `재작업|폐기|라인정지`, ABSTAIN은 `재검사`만 허용한다.
+- HITL(interrupt): `verdict=ABSTAIN`, `verdict=REJECT and action in {폐기, 라인정지}`, 또는 `confidence=low`일 때 LangGraph `interrupt()`로 중단한다. ABSTAIN 승인은 재검사 요청을 확인하는 것이며 PASS/REJECT로 바꾸는 승인이 아니다. 4.5 참조.
 - validate(코드 규칙):
   1. `observations[].text`가 Observer/Cross-Checker 실제 출력에 존재(정규화 후 부분 일치, 임계값은 dev셋으로 결정)
   2. `spec_clauses` ID가 기준서에 실제 존재하고 품목이 일치
   3. `defect_type`이 해당 품목의 유형 목록 안에 있음
   4. 스키마 통과
-  - 하나라도 실패 → write 재작성(최대 2회), 이후 `confidence=low`로 강제 HITL.
+  - 하나라도 실패 → write 재작성(최대 2회). 상한 뒤에도 유효하지 않으면 잘못된 보고서를 강제 통과시키지 않고 `ABSTAIN/low`, `validation_failure`, `재검사`로 강제 HITL한다.
 - finalize: 보고서 + LangSmith run id + 이벤트 로그.
 
 ### 4.2 MCP 서버 (`mcp_server_vision.py`, Base ops 서버 자리)
@@ -158,17 +185,20 @@ Base의 `find_prompt / find_resource_template` 멀티 서버 탐색과 docs deco
 
 ### 4.4 이미지 입력 경로와 UI
 Base `/chat`은 텍스트만 받는다. 다음을 추가한다.
-- `POST /inspect` (multipart): 이미지 파일 + 품목(optional) + session_id. 서버가 `data/uploads/{session_id}/{uuid}.png`에 저장하고 그래프 state에 `image_path`를 넣어 `/chat/stream`과 같은 SSE 경로로 진행 이벤트를 보낸다.
+- `POST /inspect` (multipart): 이미지 파일 + 필수 품목 + `thread_id`. `session_id`는 이전 클라이언트 호환용 별칭으로만 받는다. 서버가 `data/uploads/{thread_id}/{uuid}.png`에 저장하고 그래프 state에 `image_path`를 넣어 `/chat/stream`과 같은 SSE 경로로 진행 이벤트를 보낸다.
 - 개발·평가용으로 `/chat`에 `image_path` 필드를 허용해 로컬 파일을 직접 가리킬 수 있게 한다(배치 평가가 이 경로를 쓴다).
-- SSE 이벤트 추가: `ObservationReady`(크롭별), `CrossCheckDone`, `SpecJudged`(조항 ID 포함), `ApprovalRequired`, `ValidateRejected`(사유), `FinalReport`.
-- `web_chat.html`: 이미지 업로드 버튼, 관찰 결과 썸네일(크롭 영역 표시), 승인/반려 버튼 두 개.
+- SSE 이벤트 추가: `ObservationReady`(영역별), `CrossCheckDone`, `SpecJudged`(조항 ID 포함), `ApprovalRequired`, `Validation`(통과 여부와 사유), `FinalAnswer`.
+- `web_chat.html`: 이미지 업로드 버튼, 사용자가 올린 원본 이미지 썸네일, 관찰 영역 텍스트 배지, 승인/반려 버튼 두 개. 현재 UI는 크롭 이미지나 영역 오버레이를 별도로 생성하지 않는다.
 
 ### 4.5 HITL 재개 설계
 LangGraph `interrupt()`는 checkpointer와 thread_id가 필요하다. Base에는 없으므로 다음을 추가한다.
-- checkpointer: `langgraph.checkpoint.sqlite.SqliteSaver`를 `SupervisorDeps`에 주입. 파일은 기존 `session.db`와 분리(`checkpoints.db`). thread_id = session_id.
-- `POST /chat/resume {session_id, decision: approve|reject, note}`: `Command(resume=...)`로 그래프 재개. reject면 write 노드로 돌아가 actions를 보수적으로 재작성.
+- checkpointer: `langgraph.checkpoint.sqlite.AsyncSqliteSaver`를 `SupervisorDeps`에 주입. 파일은 기존 `session.db`와 분리(`checkpoints.db`). 외부 `thread_id` 앞에 실행 조건 namespace를 붙여 저장 ID를 `v2:{thread_id}`, `v1:B0:{thread_id}`, `v1:B1:{thread_id}`로 분리한다. 같은 사용자 ID를 써도 After와 두 Before 조건의 체크포인트는 섞이지 않는다.
+- 서버는 `interrupt()`가 만든 LangGraph `Interrupt.id`를 `ApprovalRequired.approval_id`로 보내고 report를 함께 제공한다. `POST /chat/resume {thread_id, approval_id, decision: approve|reject, note}`는 `approval_id`를 필수로 받고, 현재 namespace의 유일한 pending interrupt ID와 정확히 일치할 때만 `Command(resume={approval_id: ...})`로 재개한다. stale·재사용·다른 조건의 ID는 409로 거부한다.
+- 한 초안의 승인 결정은 그 초안에만 유효하다. 사람 반려 또는 validate 반려로 `write`가 새 초안을 만들면 approval을 초기화하고 새 interrupt ID로 다시 HITL 승인을 요구한다. reject면 원본 위험 보고서를 강제 완료하지 않고 보수적 재작성 경로로 보낸다.
+- pending interrupt가 있는 외부 `thread_id`로 `/chat`, `/chat/stream`, `/inspect` 새 요청을 보내면 409로 거부해 대기 체크포인트 덮어쓰기를 막는다. 먼저 `/chat/resume`으로 해당 초안을 처리해야 한다.
+- 같은 namespace·`thread_id`의 신규 요청과 resume는 single-flight로 직렬화한다. 이미 실행 중이면 409로 거부하고, SSE는 endpoint가 응답 객체를 만든 시점이 아니라 스트림의 자연 종료·예외·취소까지 예약을 유지한다. 따라서 같은 `approval_id`의 동시 재사용과 두 신규 요청의 checkpoint TOCTOU를 허용하지 않는다.
 - `HITL_MODE=interactive | auto_approve | auto_reject`: 배치 평가는 `auto_approve`로 돌려 HITL 발생률만 기록한다. 데모는 interactive.
-- 서버 재시작 후 재개: checkpointer가 SQLite라 가능. L1 테스트에 포함.
+- 서버 재시작 후 재개: SQLite checkpointer에 저장된 같은 namespace·`thread_id`·`approval_id`로 가능하다. L1 테스트에 포함.
 
 ### 4.6 RAG
 - 임베딩: OpenAI `text-embedding-3-small`(실측) 또는 Ollama 로컬 임베딩(무료 경로). 벡터 스토어 인메모리(Chroma). 색인 단위: 기준서 조항 1개 = 1 청크, 메타 `{item, defect_type, clause_id}`. 품목 메타 필터 후 유사도 검색.
@@ -201,6 +231,8 @@ docs/adr/             # ADR 4건
 ### 5.1 L1 단위 테스트 (pytest, fake 백엔드, 외부 호출 없음)
 - validate 원문 대조: 존재/부분일치/불일치/띄어쓰기 변형
 - analysis 합의 규칙: 일치·불일치·부분 조합 전부
+- 판독 경계: 전체 5개 `None`, crop 1개만 `None`, full `None`+정상 사분면 2개/3개,
+  center 재계획 뒤에도 `O?`, Cross만 판독 불가, 명시적 `no_cross`
 - 크롭 분할 좌표·경계, 좌우 반전 좌표 변환
 - RAG 검색: 조항 쿼리 → 올바른 품목·조항 top-1 (소규모 고정 셋)
 - HITL 트리거 조건, `HITL_MODE` 세 값, 서버 재시작 후 resume
@@ -210,24 +242,61 @@ docs/adr/             # ADR 4건
 - VLM tool 단독 = Before 기준선 B0. dev셋에서 B0 프롬프트도 After와 같은 정성으로 튜닝해 강한 기준선으로 만든다(약한 Before로 차이를 부풀리지 않는다).
 - RAG 검색 품질: 관찰 문장 → 정답 결함유형의 조항이 top-3 안에 드는 비율. 임베딩 모델 2종 비교.
 
-### 5.3 L3 종단 평가 — held-out 120장
+### 5.3 L3 종단 평가 — held-out 140장
 | 지표 | 정의 |
 |---|---|
-| balanced accuracy, F1 | verdict(PASS/REJECT) vs 폴더(good/결함) |
-| FPR | 정상품을 REJECT한 비율 (과검 → 생산성 손실) |
-| FNR | 결함을 PASS한 비율 (미검 → 품질 사고, 더 위험) |
+| 종단 balanced accuracy | 정상은 PASS, 결함은 REJECT일 때만 정답. ABSTAIN·오류·누락은 오답이며 전체 N에서 빼지 않음 |
+| 보수적 정상 실패율/FPR | 정상품에서 PASS가 아닌 비율. REJECT와 ABSTAIN을 모두 실패로 포함 |
+| 보수적 결함 실패율/FNR | 결함에서 REJECT가 아닌 비율. PASS와 ABSTAIN을 모두 실패로 포함 |
+| coverage, abstain rate | `(PASS+REJECT)/전체 N`, `ABSTAIN/전체 N`; 전체·정상·결함별 보고 |
+| selective accuracy·F1 | PASS/REJECT 자동 판정분만 계산하되 coverage와 항상 함께 표시 |
 | 유형 macro-F1 | defect_type vs 폴더명 (결함 이미지 한정, type_map 적용) |
 | 환각률 | 아래 독립 측정 |
 | 지연 p50/p95, 토큰, USD | LangSmith run 메타데이터 |
 | 반려·replan 횟수, HITL 발생률 | 이벤트 로그 |
 
-환각률은 validate와 독립적으로 잰다. validate가 정의한 기준으로 validate의 효과를 재면 After가 구조적으로 0에 수렴하는 순환이 생기기 때문이다.
-- 주 측정 — 블라인드 사람 대조: held-out 보고서 중 Before 15건·After 15건을 무작위 추출해 조건 표시를 가리고 관찰 원문과 대조, "관찰에 없는 사실을 단정한 문장"을 센다. 표현을 바꿔 쓴 것은 환각으로 세지 않는다. 1인 채점이라는 한계는 결과에 적는다.
+`eval/dataset.json`의 해당 split을 평가 대상의 단일 roster와 정답으로 사용한다.
+각 조건 결과를 이 roster에 left join해 누락 행도 오답으로 남기며, 결과의 중복·외부 ID나
+`item/label/is_defect/split` 불일치는 조용히 제외하지 않고 집계를 중단한다. 표에는
+`expected N`, 실제 결과 N, 누락·오류·ABSTAIN N, 자동 판정 N을 분리해 부분 실행이
+완전 실행처럼 보이지 않게 한다.
+
+환각률은 validate의 문자열 매처 규칙으로 재지 않는다. 그 규칙으로
+validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환이 생기기 때문이다.
+- 주 측정 — 블라인드 사람 대조: A 실행이 첫 `write`에서 만든
+  `pre_validation_snapshot` 보고서와 validate 반려·재작성 후의 최종
+  보고서를 동일 ID 안에서 짝지어 측정한다. canonical held-out roster에서
+  seed `20261020`으로 품목×정상/결함 비율을 유지해 20 ID를 결과 가용성을
+  보기 전에 한 번 추출하고,
+  오류·누락이 있어도 대체 표본을 뽑지 않으며 H3 결론을 중단한다.
+  40개 보고서의 pair·stage·원본 ID는 0600 매핑에만 보관하고 순서를
+  섞는다. 채점자는 summary와 observation의 각 claim을
+  `SUPPORTED|PARAPHRASE_SUPPORTED|HALLUCINATED|NON_FACTUAL|UNCERTAIN`으로
+  표시한다. `UNCERTAIN`은 보수적으로 환각에 포함하고 stage 추측도
+  받아 블라인드 실패 가능성을 같이 보고한다.
+- held-out 표본 수와 seed는 각각 `20`, `20261020`으로 고정하고 생성 CLI의
+  override를 거부한다. unblind 시점에도 mapping의 split·표본 수·seed를
+  재검증하여 세 값이 일치할 때만 H3 결론을 허용한다. dev 채점과 임의
+  파라미터 채점은 기술 통계이며 H3 지지·미입증 판정에 쓰지 않는다.
+- 채점 순서와 rubric을 고정한다. 무작위로 표시된 순서대로 각 행을
+  한 번씩 처리하고, 검색·정렬·다른 행과의 대조로 짝을 추정하지 않는다.
+  보고서를 읽은 즉시 stage 추측을 먼저 적고, claim 채점 후에 수정하지
+  않는다. 관찰 원문의 직접 근거는
+  `SUPPORTED`, 의미를 유지한 변형은 `PARAPHRASE_SUPPORTED`, 근거 없는
+  사실·모순·과장이 하나라도 섞인 claim은 전체 `HALLUCINATED`로 채점한다.
+  순수 판정·조치 권고·형식 문구처럼 관찰 사실이 아닌 claim만
+  `NON_FACTUAL`로 제외하고, 판별할 수 없으면 `UNCERTAIN`을 쓴다.
+- 20건의 1건은 5%p이다. H3의 `≤5%`는 선택된 관측 표본의 point
+  rate 기준일 뿐 모집단 상한 주장이 아니다. Wilson 95% 구간과 1인
+  채점 한계를 항상 함께 제시한다.
 - 보조 진단 — 독립 매처: validate보다 엄격한 별도 검사기(정규화 없이 8자 이상 연속 n-gram 일치). 이 값은 바꿔 쓴 문장도 실패로 잡으므로 환각률이 아니라 "원문 인용 충실도"로 이름 붙여 따로 보고한다. validate 통과분이 여기서 얼마나 떨어지는지가 validate 임계값의 느슨함을 보여준다.
 - H3의 판정은 사람 대조 값으로 한다.
 
 ### 5.4 L4 신뢰도 보정
-- 플래그 유효성: `confidence=low` 건의 오답률 vs 전체 오답률 (H4).
+- 플래그 유효성: 오류 없는 PASS/REJECT 자동 판정 안에서
+  `confidence=low`와 `high`의 오답률을 비교한다. 각 그룹이 20건
+  미만이면 H4는 보류한다. ABSTAIN·실행 오류·누락·무효는 종단
+  오답에는 남기되 두 플래그 그룹에 합치지 않고 별도 보고한다.
 - 일관성: dev셋 20장을 3회 반복 → verdict 변동률. temperature 0 고정.
 - 커버리지-정확도: low를 사람에게 넘겼을 때 자동 처리분의 정확도.
 
@@ -239,8 +308,19 @@ docs/adr/             # ADR 4건
 
 ### 5.6 LangSmith와 통계
 - Dataset: held-out 이미지 경로 + 라벨. Evaluator 함수는 전부 코드 채점(LLM-as-judge 없음). 프로젝트 분리: `vision-insp-before`, `vision-insp-after`, `vision-insp-ablation-*`.
-- 검정: 같은 이미지에 대한 Before/After 정오 짝 → McNemar. 전체와 정상/결함 층별로 각각 수행한다(balanced accuracy는 두 층의 평균이므로).
-- H4의 검정력 한계: `confidence=low`가 held-out의 5% 수준이면 6건 안팎이라 비율 비교가 불안정하다. 그 경우 dev셋 결과를 합쳐 서술 통계로만 제시하고 가설 판정은 보류한다. 120장에서 정확도 75% 근처의 단순 95% 신뢰구간은 약 ±8%p라 독립 표본 비교로는 검정력이 없고, 짝지은 검정이 맞는 방법이다. 신뢰구간은 효과 크기 서술용으로만 쓴다.
+- H1: 사전 등록 ID 전체를 유지하고 누락·오류·ABSTAIN을 오답으로
+  남긴 정상/결함 층화 paired permutation으로 Δbalanced accuracy를
+  검정한다. paired stratified bootstrap 10,000회 95% CI를 함께 제시한다.
+- H2: 결함 ID의 B0/A 유형 예측을 짝 안에서 교환해 Δmacro-F1을
+  검정한다. 품목/진실 유형 층화 bootstrap 10,000회 95% CI를 쓴다.
+  macro-F1와 다른 이진 정오 McNemar를 H2 검정으로 쓰지 않는다.
+- 보조 분석: 전체 이진 정오에 대한 exact McNemar는 전체·정상·결함
+  층으로 따로 보고하되 H1/H2의 주 검정으로 대체하지 않는다.
+  순열·bootstrap 시드는 `20261020`, Monte-Carlo 순열은 20,000회로
+  고정하고 가능한 교환 짝이 16개 이하면 정확 전수한다.
+- H4: low/high 자동 판정 중 한 그룹이 20건 미만이면 가설 판정을
+  보류하고 건수·오답률·Wilson 95% CI만 보고한다. 결과를 본 후
+  dev를 합쳐 미리 정한 표본 조건을 바꾸지 않는다.
 - 품목별 분해 표도 함께 제시한다.
 
 ---
@@ -249,26 +329,41 @@ docs/adr/             # ADR 4건
 
 | 조건 | 구성 | 분리하려는 효과 | 데이터 | 호출/장 |
 |---|---|---|---|---|
-| B0 | VLM 1회 (참조 이미지, 품목명, 해당 품목 결함 유형 목록 제공, dev 튜닝 프롬프트) | 기준선 | held-out 120 | 1 |
-| B1 | VLM 1회 + 기준서 전문 삽입 | RAG 검색 자체의 가치 | held-out 120 | 1 |
-| A | 전체 에이전트 | 제안 방식 | held-out 120 | 약 8 |
-| A−X | Cross-Checker 제거 | 교차 검증 기여 | dev 60 | 약 7 |
-| A−C | 크롭 병렬 제거(full만) | 멀티 관찰 기여 | dev 60 | 약 4 |
-| A−V | validate 비활성 | 환각 억제 기여 | dev 60 | 약 8 |
+| B0 | VLM 1회 (참조 이미지, 품목명, 해당 품목 결함 유형 목록 제공, dev 튜닝 프롬프트) | 단일 VLM 기준선 | held-out 140 | 1 |
+| B1 | B0와 같은 단일 VLM + 기준서 전문 삽입 | 소규모 기준서의 전문 삽입 대안 | held-out 140 | 1 |
+| A | 전체 에이전트 | B0 대비 전체 시스템 효과 | held-out 140 | 약 8 |
+| A(pre) | A 실행의 첫 write 불변 snapshot | 같은 실행에서 validate 전 보고서 | held-out A 중 사전 고정 20 | 추가 호출 없음 |
+| A−X | Cross-Checker 제거 + C-skip 정책 | 탐색적 묶음 ablation | dev 52 | 약 7 |
+| A−C | 사분면 crop과 center 재계획 제거(full만) | 탐색적 묶음 ablation | dev 52 | 약 4 |
+| A−V | validate 비활성 독립 실행 | 실행 진단 전용, H3 인과 근거로 사용하지 않음 | dev 52 | 약 8 |
 
-- 주 모델 축: `gpt-4o-mini`(관찰) + `gpt-4o`(교차). 호출 수 합계 약 120×10 + 60×19 ≈ 2,350회. 이미지 1장 호출당 약 0.003~0.01 USD로 잡아 상한 15 USD. 초과 시 ablation을 dev 30장으로 줄이도록 사전에 정해 둔다.
-- 로컬 축 `qwen2.5vl:3b`: dev 60장에서 B0와 A만. 비용은 없지만 시간이 들어 P2.
+- 주 모델 축: `gpt-4o-mini`(관찰) + `gpt-4o`(교차). 호출 수 합계 약 140×10 + 52×19 ≈ 2,388회. 이미지 1장 호출당 약 0.003~0.01 USD로 잡아 상한 15 USD. 초과 시 ablation을 dev 30장으로 줄이도록 사전에 정해 둔다.
+- 로컬 축 `qwen2.5vl:3b`: dev 52장에서 B0와 A만. 비용은 없지만 시간이 들어 P2.
 - 반복: 5.4의 일관성 측정만 3회(20장). 주 결과는 1회 실행이며 temperature 0.
 - 고정 조건: 같은 이미지, 같은 참조 이미지, 같은 날 실행. `SUPERVISOR_VERSION=v1`을 B0로 재구성해 Base의 버전 토글을 Before 스위치로 쓴다.
+- B0와 A는 모델 강도·호출 수·crop·교차검증·RAG·규칙 판정·validate가 함께
+  달라지므로 “전체 시스템 효과”만 주장한다. B1과 A도 전문 삽입 단일 VLM 대
+  전체 에이전트라는 대안 비교이지 RAG 검색만의 인과 효과가 아니다. RAG 고유
+  효과를 분리하려면 향후 같은 A 파이프라인의 `A-fullspec` 대조군이 필요하다.
+- A−X/A−C/A−V는 dev의 탐색적 독립 재실행이므로 효과 크기·비용 진단만 하며
+  확정적 인과 주장을 하지 않는다. H3만 동일 A 실행의 A(pre)/최종 보고서를 쓴다.
 
 ---
 
 ## 7. "신뢰할 수 없다"고 판정하는 조건 (사전 등록)
-- H1 미달(McNemar p≥0.05 또는 balanced accuracy 하락) → "에이전트 레이어가 정확도를 올린다는 증거 없음"으로 발표. H3·H4가 성립하면 "정확도 아닌 신뢰성 개선"으로 재해석하되 재해석임을 명시.
-- 환각률(보수적인 쪽) After > 5% → validate 설계 실패로 보고.
+- H1 미달(ΔBA paired permutation p≥0.05 또는 ΔBA≤0) → "전체 에이전트가
+  이 기준선보다 정확도를 올린다는 증거 없음"으로 발표. H3·H4가 성립하면
+  "정확도 아닌 신뢰성 개선"으로 재해석하되 재해석임을 명시.
+- H2 미달(Δmacro-F1 paired permutation p≥0.05 또는 Δ≤0) → 유형 분류 개선
+  효과 미입증으로 발표한다. 이진 McNemar로 대체 설명하지 않는다.
+- 선택된 20쌍의 관측 환각 포함률 After >5%, Before 이상, 또는 paired
+  exact McNemar p≥0.05 → H3 효과 미입증으로 보고한다. 모집단 5% 이하로
+  일반화하지 않는다.
 - FNR이 Before보다 증가 → 안전 관점 후퇴로 명시. FPR 개선으로 상쇄 주장 금지.
 - 일관성 변동률 > 10% → 판정 재현성 부족 명시.
-- B1 ≥ A → "이 규모에서 RAG는 불필요"로 보고하고 ADR-0001 재검토 조건 발동.
+- B1 ≥ A → "이 작은 기준서 규모에서 더 복잡한 전체 에이전트의 추가 효용이
+  관측되지 않음"으로 보고하고 ADR-0001 재검토 조건을 발동한다. RAG 검색
+  단독 효과나 불필요성을 입증했다고 표현하지 않는다.
 
 ---
 
@@ -277,12 +372,16 @@ docs/adr/             # ADR 4건
 2. validate의 false reject: 정당한 표현 변형도 반려 가능. 임계값은 dev셋으로 조정하되 held-out에 반영된 비용을 적는다.
 3. 기준서 작성자 편향: 기준서를 내가 썼다. 라벨 미참조·held-out 분리·git 고정으로 완화하지만 완전히 제거되진 않음. 실무에서는 고객 기준서가 대체.
 4. 교차 검증의 상관 오류: 같은 계열 모델은 같은 곳에서 틀릴 수 있다. 모델 분리와 이미지 반전으로 줄이지만 독립 검증이라 부르기엔 한계가 있다. ollama 축에서는 특히 약하다.
-5. RAG 규모: 4.6에 적은 대로 이 규모에서는 B1이 이길 수 있다. 그 경우 RAG는 확장성 투자로만 정당화된다.
+5. RAG 규모·비교군: 이 규모에서는 B1이 이길 수 있다. B1/A는 다른 요소도
+   함께 달라 retrieval 단독 효과를 식별하지 못한다. 그 경우 RAG는 확장성
+   투자로만 설명하고, 고유 효과는 향후 같은 파이프라인 대조군으로 확인한다.
 6. MVTec의 통제 환경: 조명·배경이 균일한 벤치마크. 이 프로젝트가 증명하는 것은 "파이프라인이 설계대로 신뢰성을 올리는가"이고 현장 적용 성능이 아니다.
 7. 소형 로컬 VLM 품질: 3b 모델 Before가 매우 낮을 수 있음. After 상승폭이 과장돼 보일 수 있으므로 gpt-4o-mini 축 결과를 주 결과로 삼는다.
-8. 환각률 사람 채점이 1인: 블라인드로 하지만 채점자 편향이 남는다.
+8. 환각률 사람 채점이 1인·20쌍: 블라인드와 stage 추측 기록을 써도 채점자
+   편향이 남고, 관측 5%는 모집단 5% 상한을 뜻하지 않는다.
 9. HITL 중단과 상태 복원: checkpointer로 해결하지만 배치 평가에서는 auto_approve라 사람 판단의 효과는 측정되지 않는다.
-10. 루프 상한: write↔validate 2회, replan 1회. 상한 도달 시 low로 HITL.
+10. 루프 상한: write↔validate 2회, replan 1회. 상한 도달 뒤에도 판독·검증이
+    유효하지 않으면 `ABSTAIN/low`와 재검사로 HITL하며, 무효 보고서를 강제 통과시키지 않는다.
 11. 라이선스: CC BY-NC-SA → 비상업 데모 한정. 이미지는 레포에 올리지 않는다.
 12. 에이전트 레이어의 상한: 지각기가 못 본 결함은 어떤 레이어도 복구 못 한다. FNR 하한은 VLM이 정한다.
 
@@ -298,8 +397,8 @@ docs/adr/             # ADR 4건
 | Day2 09–12 | Cross-Checker, Spec-Judge(RAG), analysis 합의 규칙 | research 2단계 완성 |
 | Day2 13–15 | write 스키마 + validate + HITL(checkpointer, resume, HITL_MODE) | P0 완료 |
 | Day2 15–17 | B0/B1 구성, `eval/run_eval.py`, 독립 환각 매처, LangSmith Dataset, dev셋 튜닝 | 평가 파이프라인 |
-| Day2 17–21 | held-out B0/B1/A 실측 → ablation(dev) → 일관성 20장×3 → McNemar | 결과 표 |
-| Day3 09–10 | 블라인드 환각 채점 30건, 품목별 분해 | 최종 수치 |
+| Day2 17–21 | held-out B0/B1/A 실측 → ablation(dev) → 일관성 20장×3 → 지표별 paired 검정 | 결과 표 |
+| Day3 09–10 | 동일 A 실행 validate 전·후 블라인드 환각 채점 20쌍(40건), 품목별 분해 | 최종 수치 |
 | Day3 10–12 | 모듈 분리, pytest, ADR 4건, README(보고서 대체), `/inspect` 업로드 UI(시간 되면) | 제출물 |
 | Day3 12–13 | PPT(문제→개선→수치→한계), fake 백엔드 데모 리허설, 데모 GIF 녹화 | 발표 |
 | Day3 13:00 / 14:00 | 제출 / 발표 | |
@@ -326,5 +425,6 @@ docs/adr/             # ADR 4건
 ## 12. 발표 구조 (지시서 12쪽 순서)
 1. 문제: VLM은 산업 검사에서 25%를 틀리고 틀린 이유를 지어낸다(MMAD·CVPR 근거)
 2. 개선: 관찰/교차검증/판정 2단계 research, 기준서 RAG, validate, HITL (그래프 1장 + Base 패턴 유지표)
-3. Before/After 수치: balanced accuracy·FNR·유형 F1·환각률(독립 측정)·확신 플래그 유효성·지연·비용. McNemar p값. 품목별 분해
+3. Before/After 수치: balanced accuracy·FNR·유형 F1·환각률(독립 측정)·확신
+   플래그 유효성·지연·비용. 지표별 paired p값·95% CI와 보조 McNemar. 품목별 분해
 4. 한계·추가 개선: 8장 항목 중 실측으로 드러난 것 우선. B1이 이겼다면 그것부터.

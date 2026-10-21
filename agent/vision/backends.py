@@ -1,7 +1,8 @@
 """VLM 백엔드 구현.
 
 ===============================================================================
-주의: FakeVLM은 라벨(폴더명)을 들여다보므로 평가에 절대 쓰지 않는다.
+주의: FakeVLM은 경로와 파일 해시로 라벨을 들여다본다 — 평가 금지.
+eval/dataset.json 등록 파일은 SHA-256으로 라벨을 역조회해 업로드 복사본에도 쓴다.
 eval 은 fake 를 거부한다. FakeVLM은 테스트와 데모에만 사용한다.
 ===============================================================================
 """
@@ -16,12 +17,15 @@ import json
 import os
 import re
 from abc import ABC, abstractmethod
+from functools import lru_cache
+from pathlib import Path
 from typing import Any, Literal
 
 import httpx
 from langsmith import traceable
 from PIL import Image
 
+from agent.readability import is_unreadable_text
 from agent.typemap import load_type_map
 
 from .crop import REGIONS, crop_region, flip_h, unflip_regions
@@ -31,6 +35,7 @@ Role = Literal["observer", "cross"]
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
+DEFAULT_DATASET_PATH = Path(__file__).resolve().parents[2] / "eval" / "dataset.json"
 
 _FAKE_OBSERVATIONS = {
     "scratch_head": ("머리 표면에 선형 긁힘이 보입니다.", ["선형 긁힘", "머리 표면"]),
@@ -48,6 +53,55 @@ _FAKE_OBSERVATIONS = {
     "hole": ("껍질 표면에 둘러싼 경계가 분명한 구멍이 보입니다.", ["구멍", "분명한 경계"]),
     "print": ("껍질 표면에 주변 무늬와 다른 인쇄형 흔적이 보입니다.", ["인쇄형 흔적", "표면 무늬 차이"]),
 }
+
+
+def _file_sha256(path: Path) -> str:
+    """파일을 이미지로 해석하지 않고 바이트 해시만 계산한다."""
+    digest = hashlib.sha256()
+    with path.open("rb") as file:
+        for chunk in iter(lambda: file.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+@lru_cache(maxsize=4)
+def _load_fake_label_hashes(dataset_path: Path) -> dict[str, str]:
+    """dataset.json에 등록되고 현재 존재하는 파일의 해시-라벨 맵을 만든다."""
+    try:
+        payload = json.loads(dataset_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    samples = payload.get("samples") if isinstance(payload, dict) else None
+    if not isinstance(samples, list):
+        return {}
+
+    root = dataset_path.resolve().parent.parent
+    labels_by_hash: dict[str, str] = {}
+    ambiguous_hashes: set[str] = set()
+    for sample in samples:
+        if not isinstance(sample, dict):
+            continue
+        raw_path = sample.get("path")
+        label = sample.get("label")
+        if not isinstance(raw_path, str) or not isinstance(label, str):
+            continue
+        image_path = Path(raw_path)
+        if not image_path.is_absolute():
+            image_path = root / image_path
+        try:
+            file_hash = _file_sha256(image_path)
+        except OSError:
+            continue
+        previous = labels_by_hash.get(file_hash)
+        if previous is not None and previous != label:
+            ambiguous_hashes.add(file_hash)
+            continue
+        labels_by_hash[file_hash] = label
+
+    for file_hash in ambiguous_hashes:
+        labels_by_hash.pop(file_hash, None)
+    return labels_by_hash
 
 
 def _encode_png(path: str, region: str, flip: bool) -> str:
@@ -117,13 +171,30 @@ def _language_text(raw: dict[str, Any], style: str) -> str:
     return str(raw.get("text", ""))
 
 
+
+
 def _normalize_result(raw: dict[str, Any], *, style: str, model: str,
-                      tokens: int, usd: float) -> dict[str, Any]:
+                      tokens: int, usd: float,
+                      item: str | None = None) -> dict[str, Any]:
     if style == "baseline":
         verdict = str(raw.get("verdict", "")).upper()
-        defect_type = raw.get("defect_type")
+        raw_defect_type = raw.get("defect_type")
+        invalid_defect_shape = (
+            "defect_type" not in raw
+            or (raw_defect_type is not None and not isinstance(raw_defect_type, str))
+            or (
+                isinstance(raw_defect_type, str)
+                and (
+                    not raw_defect_type.strip()
+                    or raw_defect_type.strip().lower() in {"null", "none", "good"}
+                    or raw_defect_type.strip() == "\uc815\uc0c1"
+                )
+            )
+        )
+        defect_type = raw_defect_type
         if (
-            not isinstance(defect_type, str)
+            invalid_defect_shape
+            or not isinstance(defect_type, str)
             or not defect_type.strip()
             or defect_type.strip().lower() in {"null", "none", "good"}
             or defect_type.strip() == "정상"
@@ -131,18 +202,51 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str,
             defect_type = None
         else:
             defect_type = defect_type.strip()
-        observations = _as_string_list(raw.get("observations"))
+        raw_observations = raw.get("observations")
+        invalid_observations_shape = not isinstance(raw_observations, list) or any(
+            not isinstance(value, str) for value in raw_observations
+        )
+        observations = _as_string_list(raw_observations)
         if not observations and isinstance(raw.get("text"), str):
             observations = [raw["text"].strip()] if raw["text"].strip() else []
-        if verdict not in {"PASS", "REJECT"}:
-            verdict = "REJECT" if defect_type else "PASS"
         text = "\n".join(observations) or "판독 불가"
+        allowed_types = {
+            name for name in load_type_map().get(item or "", {}) if name != "good"
+        }
+        abstain_reason: str | None = None
+        if not raw or invalid_defect_shape or invalid_observations_shape:
+            verdict = "ABSTAIN"
+            abstain_reason = "validation_failure"
+        elif not _as_string_list(raw_observations):
+            verdict = "ABSTAIN"
+            abstain_reason = "insufficient_visual_evidence"
+        elif is_unreadable_text(text):
+            verdict = "ABSTAIN"
+            abstain_reason = "insufficient_visual_evidence"
+        elif not _has_korean(text):
+            verdict = "ABSTAIN"
+            abstain_reason = "validation_failure"
+        elif verdict == "ABSTAIN" and defect_type is None:
+            abstain_reason = "insufficient_visual_evidence"
+        elif verdict not in {"PASS", "REJECT"}:
+            verdict = "ABSTAIN"
+            abstain_reason = "validation_failure"
+        elif verdict == "PASS" and defect_type is not None:
+            verdict = "ABSTAIN"
+            abstain_reason = "validation_failure"
+        elif verdict == "REJECT" and defect_type not in allowed_types:
+            verdict = "ABSTAIN"
+            abstain_reason = "validation_failure"
+        if verdict == "ABSTAIN":
+            defect_type = None
         features = _as_string_list(raw.get("features"))
         if not features and defect_type:
             features = [defect_type]
         return {
             "text": text,
-            "anomaly_seen": verdict == "REJECT",
+            "anomaly_seen": (
+                None if verdict == "ABSTAIN" else verdict == "REJECT"
+            ),
             "regions": _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"}),
             "features": features,
             "model": model,
@@ -151,11 +255,25 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str,
             "verdict": verdict,
             "defect_type": defect_type,
             "observations": observations,
+            "abstain_reason": abstain_reason,
         }
 
     text = raw.get("text")
+    normalized_text = (
+        text.strip() if isinstance(text, str) and text.strip() else "판독 불가"
+    )
+    if is_unreadable_text(normalized_text) or not _has_korean(normalized_text):
+        return {
+            "text": "판독 불가",
+            "anomaly_seen": None,
+            "regions": [],
+            "features": [],
+            "model": model,
+            "tokens": tokens,
+            "usd": round(float(usd), 6),
+        }
     return {
-        "text": text.strip() if isinstance(text, str) and text.strip() else "판독 불가",
+        "text": normalized_text,
         "anomaly_seen": _as_bool(raw.get("anomaly_seen")),
         "regions": _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"}),
         "features": _as_string_list(raw.get("features")),
@@ -183,8 +301,9 @@ def _prompt(style: str, *, item: str, region: str, has_reference: bool,
             f"[{defect_types}]이다. 이미지를 한 번에 판정하라. "
             "정상이면 verdict=PASS, defect_type=null로 하고, 결함이면 "
             "verdict=REJECT와 목록 중 하나의 defect_type을 쓰라. "
+            "이미지를 판독할 수 없으면 verdict=ABSTAIN, defect_type=null로 하라. "
             "JSON 객체로만 응답하라: "
-            '{"verdict":"PASS|REJECT","defect_type":"결함 유형|null",'
+            '{"verdict":"PASS|REJECT|ABSTAIN","defect_type":"결함 유형|null",'
             '"observations":["눈으로 확인한 한국어 관찰"]}' + context
         )
 
@@ -260,16 +379,25 @@ class VLMBackend(ABC):
             raw = _parse_json(content)
 
         return _normalize_result(raw, style=style, model=self.name,
-                                 tokens=tokens, usd=usd)
+                                 tokens=tokens, usd=usd, item=item)
 
 
 class FakeVLM(VLMBackend):
-    """폴더 라벨로 결과를 만드는 외부 호출 없는 결정론적 백엔드."""
+    """폴더 라벨과 등록 파일 해시로 결과를 만드는 결정론적 백엔드."""
 
     name = "fake-vlm"
 
-    def __init__(self):
+    def __init__(self, dataset_path: str | Path | None = None):
         super().__init__("fake")
+        resolved_path = DEFAULT_DATASET_PATH if dataset_path is None else Path(dataset_path)
+        self._labels_by_hash = _load_fake_label_hashes(resolved_path.resolve())
+
+    def _label_from_hash(self, image_path: str) -> str | None:
+        try:
+            file_hash = _file_sha256(Path(image_path))
+        except OSError:
+            return None
+        return self._labels_by_hash.get(file_hash)
 
     async def _request(self, prompt: str, images: list[str]) -> tuple[str, int, float]:
         raise NotImplementedError("FakeVLM은 이미지를 외부 모델에 보내지 않습니다.")
@@ -299,8 +427,9 @@ class FakeVLM(VLMBackend):
 
         normalized_path = image_path.replace("\\", "/")
         match = re.search(r"(?:^|/)test/([^/]+)(?:/|$)", normalized_path)
-        if not match:
-            return {
+        defect_type = match.group(1) if match else self._label_from_hash(image_path)
+        if defect_type is None:
+            result: dict[str, Any] = {
                 "text": "판독 불가",
                 "anomaly_seen": None,
                 "regions": [],
@@ -309,10 +438,17 @@ class FakeVLM(VLMBackend):
                 "tokens": 0,
                 "usd": 0.0,
             }
+            if style == "baseline":
+                result.update({
+                    "verdict": "ABSTAIN",
+                    "defect_type": None,
+                    "observations": ["판독 불가"],
+                    "abstain_reason": "insufficient_visual_evidence",
+                })
+            return result
 
-        defect_type = match.group(1)
         if defect_type not in load_type_map().get(item, {}):
-            return {
+            result = {
                 "text": "판독 불가",
                 "anomaly_seen": None,
                 "regions": [],
@@ -321,6 +457,14 @@ class FakeVLM(VLMBackend):
                 "tokens": 0,
                 "usd": 0.0,
             }
+            if style == "baseline":
+                result.update({
+                    "verdict": "ABSTAIN",
+                    "defect_type": None,
+                    "observations": ["판독 불가"],
+                    "abstain_reason": "insufficient_visual_evidence",
+                })
+            return result
         if defect_type == "good":
             text = (
                 "체크리스트의 모든 항목이 아니오이며 눈에 띄는 이상이 보이지 않습니다."
@@ -359,6 +503,7 @@ class FakeVLM(VLMBackend):
                 "verdict": "REJECT" if anomaly_seen else "PASS",
                 "defect_type": defect_type if anomaly_seen else None,
                 "observations": [text],
+                "abstain_reason": None,
             })
         return result
 

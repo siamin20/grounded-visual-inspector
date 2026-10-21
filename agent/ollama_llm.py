@@ -115,9 +115,22 @@ JUDGE_SCHEMA = {
 REPORT_SCHEMA = {
     "type": "object",
     "properties": {
-        "verdict": {"type": "string", "enum": ["PASS", "REJECT"]},
+        "verdict": {
+            "type": "string",
+            "enum": ["PASS", "REJECT", "ABSTAIN"],
+        },
         "defect_type": {"type": ["string", "null"]},
         "confidence": {"type": "string", "enum": ["high", "low"]},
+        "abstain_reason": {
+            "type": ["string", "null"],
+            "enum": [
+                "insufficient_visual_evidence",
+                "ungrounded_anomaly",
+                "evidence_conflict",
+                "validation_failure",
+                None,
+            ],
+        },
         "observations": {
             "type": "array",
             "items": {
@@ -133,14 +146,14 @@ REPORT_SCHEMA = {
         "actions": {
             "type": "array",
             "items": {"type": "string",
-                      "enum": ["재작업", "폐기", "라인정지", "통과"]},
+                      "enum": ["재작업", "폐기", "라인정지", "통과", "재검사"]},
             "minItems": 1,
         },
         "lot": {"type": "object"},
         "summary": {"type": "string"},
     },
-    "required": ["verdict", "defect_type", "confidence", "observations",
-                 "spec_clauses", "actions", "lot", "summary"],
+    "required": ["verdict", "defect_type", "confidence", "abstain_reason",
+                 "observations", "spec_clauses", "actions", "lot", "summary"],
 }
 
 _INSPECTION_TASKS = (
@@ -169,31 +182,11 @@ def _normalize_inspection_plan(raw: object) -> dict:
 
 
 def _normalize_judgement(raw: object, clauses: list[dict]) -> dict:
-    """인용 ID와 결함 유형을 입력 조항 범위 안으로 제한한다."""
-    clause_by_id = {
-        clause.get("clause_id"): clause
-        for clause in clauses
-        if isinstance(clause, dict) and isinstance(clause.get("clause_id"), str)
-    }
-    requested = raw.get("violations", []) if isinstance(raw, dict) else []
-    violations = list(dict.fromkeys(
-        clause_id for clause_id in requested
-        if clause_id in clause_by_id
-        and clause_by_id[clause_id].get("defect_type") != "good"
-    )) if isinstance(requested, list) else []
-    defect_type = None
-    if violations:
-        candidate = clause_by_id[violations[0]].get("defect_type")
-        if isinstance(candidate, str):
-            defect_type = candidate
-    rationale = raw.get("rationale") if isinstance(raw, dict) else None
-    if not isinstance(rationale, str) or not rationale.strip():
-        rationale = (
-            "입력 기준서 조항과 관찰문을 비교했습니다."
-            if violations else "인용 가능한 위반 조항이 없습니다."
-        )
-    return {"violations": violations, "defect_type": defect_type,
-            "rationale": rationale.strip()}
+    """후속 검증은 원본 주장을 교정하지 않고 공통 검증이 담당하게 둔다."""
+    del clauses
+    if not isinstance(raw, dict):
+        return {"_invalid_shape": type(raw).__name__}
+    return dict(raw)
 
 
 class OllamaLLM:
@@ -416,7 +409,8 @@ class OllamaQualityLLM(OllamaLLM):
             "당신은 제품 외관 검사 보고서 작성자다. 입력 ctx의 사실만 사용하고 "
             "관찰 문구와 source_call_id를 그대로 인용하라. spec_clauses에는 "
             "judgement.violations의 ID만 넣으며, PASS의 조치는 통과로 적으라. "
-            "REJECT의 조치는 guide_text에 적힌 옵션에서만 고르라. JSON 객체만 응답하라."
+            "REJECT의 조치는 guide_text에 적힌 옵션에서만 고르라. "
+            "ABSTAIN은 결함 유형과 조항 없이 low/재검사로 적으라. JSON 객체만 응답하라."
         )
         user = (
             f"## 작성 횟수\n{attempt}\n\n## 검사 컨텍스트\n"

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import uuid
 
 from fastapi.testclient import TestClient
@@ -11,15 +10,13 @@ from fastapi.testclient import TestClient
 from server import app
 
 
-ROOT = Path(__file__).resolve().parents[1]
-IMAGE_PATH = ROOT / "data" / "mvtec" / "screw" / "test" / "scratch_neck" / "000.png"
-
-
 def _event_types(events: list[dict]) -> list[str]:
     return [event["type"] for event in events]
 
 
-def test_fake_post_chat_returns_grounded_report(monkeypatch) -> None:
+def test_fake_post_chat_returns_grounded_report(
+    monkeypatch, synthetic_mvtec_paths
+) -> None:
     monkeypatch.setenv("LLM_BACKEND", "fake")
     monkeypatch.setenv("VLM_BACKEND", "fake")
     monkeypatch.setenv("EMBED_BACKEND", "fake")
@@ -30,7 +27,7 @@ def test_fake_post_chat_returns_grounded_report(monkeypatch) -> None:
             json={
                 "message": "검사해줘",
                 "thread_id": f"phase3-post-{uuid.uuid4()}",
-                "image_path": str(IMAGE_PATH),
+                "image_path": str(synthetic_mvtec_paths["scratch_neck"]),
                 "item": "screw",
             },
         )
@@ -81,7 +78,9 @@ def test_fake_post_chat_returns_grounded_report(monkeypatch) -> None:
     ]
 
 
-def test_fake_sse_preserves_event_order_and_format(monkeypatch) -> None:
+def test_fake_sse_preserves_event_order_and_format(
+    monkeypatch, synthetic_mvtec_paths
+) -> None:
     monkeypatch.setenv("LLM_BACKEND", "fake")
     monkeypatch.setenv("VLM_BACKEND", "fake")
     monkeypatch.setenv("EMBED_BACKEND", "fake")
@@ -91,7 +90,7 @@ def test_fake_sse_preserves_event_order_and_format(monkeypatch) -> None:
             params={
                 "message": "검사해줘",
                 "thread_id": f"phase3-sse-{uuid.uuid4()}",
-                "image_path": str(IMAGE_PATH),
+                "image_path": str(synthetic_mvtec_paths["scratch_neck"]),
                 "item": "screw",
             },
         )
@@ -133,7 +132,9 @@ def test_fake_sse_preserves_event_order_and_format(monkeypatch) -> None:
     assert final["reply"].startswith("# 제품 검사 보고서")
 
 
-def test_v1_baseline_does_not_initialize_embedding_backend(monkeypatch) -> None:
+def test_v1_baseline_does_not_initialize_embedding_backend(
+    monkeypatch, synthetic_mvtec_paths
+) -> None:
     monkeypatch.setenv("SUPERVISOR_VERSION", "v1")
     monkeypatch.setenv("BASELINE_MODE", "B1")
     monkeypatch.setenv("LLM_BACKEND", "fake")
@@ -146,7 +147,7 @@ def test_v1_baseline_does_not_initialize_embedding_backend(monkeypatch) -> None:
             json={
                 "message": "검사해줘",
                 "thread_id": f"phase3-v1-{uuid.uuid4()}",
-                "image_path": str(IMAGE_PATH),
+                "image_path": str(synthetic_mvtec_paths["scratch_neck"]),
                 "item": "screw",
             },
         )

@@ -6,8 +6,15 @@ from pathlib import Path
 import pytest
 
 from agent.fake_llm import FastLLM, QualityLLM
-from agent.ollama_llm import OllamaFastLLM
-from agent.openai_llm import OpenAIFastLLM, OpenAIQualityLLM
+from agent.ollama_llm import (
+    OllamaFastLLM,
+    _normalize_judgement as normalize_ollama_judgement,
+)
+from agent.openai_llm import (
+    OpenAIFastLLM,
+    OpenAIQualityLLM,
+    _normalize_judgement as normalize_openai_judgement,
+)
 from agent.rag import FakeEmbedder, SpecIndex
 from agent.typemap import load_type_map
 from agent.vision.backends import FakeVLM
@@ -139,6 +146,32 @@ async def test_fake_report_first_attempt_is_rejected_then_grounded():
         "source_call_id": "obs-full",
     }]
     assert second["actions"] == ["재작업"]
+    assert second["abstain_reason"] is None
+
+
+@pytest.mark.asyncio
+async def test_fake_report_emits_abstain_contract() -> None:
+    llm = QualityLLM("fake-quality", 0.0)
+    ctx = {
+        "item": "screw",
+        "lot": {},
+        "observations": [],
+        "judgement": {"violations": ["SCREW-04"]},
+        "verdict": "ABSTAIN",
+        "defect_type": "scratch_neck",
+        "confidence": "high",
+        "abstain_reason": "insufficient_visual_evidence",
+        "guide_text": "- 조치 옵션: 폐기",
+    }
+
+    report = json.loads((await llm.write_report(ctx, 2, None))[0])
+
+    assert report["verdict"] == "ABSTAIN"
+    assert report["defect_type"] is None
+    assert report["confidence"] == "low"
+    assert report["abstain_reason"] == "insufficient_visual_evidence"
+    assert report["spec_clauses"] == []
+    assert report["actions"] == ["재검사"]
 
 
 @pytest.mark.parametrize("factory", [
@@ -160,7 +193,7 @@ def test_real_plan_repairs_missing_and_invalid_tasks(monkeypatch, factory):
     ]
 
 
-def test_real_judge_drops_unknown_clause_and_uses_clause_type(monkeypatch):
+def test_real_judge_preserves_claim_for_shared_validation(monkeypatch):
     llm = OpenAIFastLLM("gpt", 0.0)
 
     def fake_chat(_system, _user, **_kwargs):
@@ -173,10 +206,28 @@ def test_real_judge_drops_unknown_clause_and_uses_clause_type(monkeypatch):
     monkeypatch.setattr(llm, "_chat", fake_chat)
     result, _ = llm.judge("목 부위 긁힘", CLAUSES, "screw")
     assert result == {
-        "violations": ["SCREW-04"],
-        "defect_type": "scratch_neck",
+        "violations": ["SCREW-04", "MADE-UP-99"],
+        "defect_type": "thread_top",
         "rationale": "목 부위 긁힘",
     }
+
+
+@pytest.mark.parametrize(
+    "normalizer",
+    [normalize_openai_judgement, normalize_ollama_judgement],
+)
+@pytest.mark.parametrize("raw", [None, [], {"violations": [{}]}])
+def test_real_judge_normalizer_never_crashes_or_invents_claims(
+    normalizer,
+    raw,
+) -> None:
+    result = normalizer(raw, CLAUSES)
+
+    assert isinstance(result, dict)
+    if isinstance(raw, dict):
+        assert result == raw
+    else:
+        assert result.get("_invalid_shape")
 
 
 @pytest.mark.asyncio

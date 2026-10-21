@@ -46,7 +46,7 @@ async def test_baseline_calls_vlm_once_and_b1_adds_full_spec(
 ) -> None:
     monkeypatch.setenv("BASELINE_MODE", mode)
     mcp = RecordingMCP()
-    deps = SimpleNamespace(mcp=mcp)
+    deps = SimpleNamespace(mcp=mcp, hitl_mode="auto_approve")
     result = await run_v1(
         deps,
         "검사해줘",

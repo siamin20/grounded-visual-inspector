@@ -33,12 +33,13 @@ class InspectResult(BaseModel):
     verdict: str | None = Field(default=None, description="baseline 판정")
     defect_type: str | None = Field(default=None, description="baseline 결함 유형")
     observations: list[str] | None = Field(default=None, description="baseline 관찰 목록")
+    abstain_reason: str | None = Field(default=None, description="baseline 판정 보류 사유")
 
     @model_serializer(mode="wrap")
     def _serialize_without_none(self, handler):
         """baseline 전용 필드는 값이 있을 때만 직렬화한다."""
         data = handler(self)
-        baseline_keys = ("verdict", "defect_type", "observations")
+        baseline_keys = ("verdict", "defect_type", "observations", "abstain_reason")
         if not any(data[key] is not None for key in baseline_keys):
             for key in baseline_keys:
                 del data[key]
@@ -87,6 +88,7 @@ async def inspect_image(
         verdict=result.get("verdict"),
         defect_type=result.get("defect_type"),
         observations=result.get("observations"),
+        abstain_reason=result.get("abstain_reason"),
     )
 
 

@@ -5,22 +5,29 @@ from langsmith import traceable
 from agent.deps import SupervisorDeps
 from agent.state import AgentState
 
-from .common import event
+from .common import event, observer_status
 
 
 @traceable(name="replan_check_node")
 async def replan_check_node(state: AgentState, deps: SupervisorDeps) -> dict:
-    del deps
-    unreadable = any(
-        "판독 불가" in str(observation.get("text", ""))
-        or (
-            not observation.get("features")
-            and observation.get("anomaly_seen") is None
-        )
-        for observation in state.get("observations", [])
-    )
+    status = observer_status(state.get("observations", []))
     rounds = int(state.get("replan_rounds", 0))
-    if unreadable and rounds == 0:
+    ablation = state.get("ablation") or getattr(deps, "ablation", "")
+    if status == "O?" and rounds == 0 and ablation == "no_crops":
+        return {
+            "research_sufficient": True,
+            "events": event(
+                state,
+                "ReplanCheck",
+                round=rounds,
+                is_sufficient=True,
+                observer_status=status,
+                replan_skipped=True,
+                skip_reason="no_crops_full_only",
+                ablation=ablation,
+            ),
+        }
+    if status == "O?" and rounds == 0:
         task = {
             "id": "task-observe-center",
             "agent": "research",
@@ -38,11 +45,16 @@ async def replan_check_node(state: AgentState, deps: SupervisorDeps) -> dict:
                 round=rounds,
                 is_sufficient=False,
                 gap_task=task["id"],
+                observer_status=status,
             ),
         }
     return {
         "research_sufficient": True,
         "events": event(
-            state, "ReplanCheck", round=rounds, is_sufficient=True
+            state,
+            "ReplanCheck",
+            round=rounds,
+            is_sufficient=True,
+            observer_status=status,
         ),
     }

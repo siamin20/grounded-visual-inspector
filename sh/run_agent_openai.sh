@@ -13,6 +13,7 @@
 # 종료하려면 이 터미널에서 Ctrl+C.
 #
 set -euo pipefail
+# 전체 에이전트는 이미지 1장당 약 8회의 모델 호출을 사용한다.
 cd "$(dirname "$0")/.."
 
 # 이 머신은 plain python3/python이 alias로 다른 경로를 가리켜 venv를 무시하는
@@ -29,7 +30,11 @@ if [ ! -f .env ]; then
     exit 1
 fi
 set -a; source .env; set +a
-export LANGCHAIN_PROJECT="capstone-all-total-openai"   # fake/ollama 모드와 프로젝트 분리
+export LLM_BACKEND="openai"
+export VLM_BACKEND="${VLM_BACKEND:-openai}"
+export EMBED_BACKEND="${EMBED_BACKEND:-openai}"
+export HITL_MODE="${HITL_MODE:-interactive}"
+export LANGCHAIN_PROJECT="grounded-visual-inspector-openai"
 
 if [ -z "${OPENAI_API_KEY:-}" ] || [ "$OPENAI_API_KEY" = "sk-..." ]; then
     echo "ERROR: OPENAI_API_KEY가 비어있거나 플레이스홀더입니다 — .env에 본인 키를 채우세요 (.env.example 참고)."
@@ -38,9 +43,10 @@ fi
 
 echo "LangSmith: project=$LANGCHAIN_PROJECT tracing=${LANGCHAIN_TRACING_V2:-}"
 echo "모델: fast=$FAST_MODEL / quality=$QUALITY_MODEL"
+echo "백엔드: llm=$LLM_BACKEND / vlm=$VLM_BACKEND / embed=$EMBED_BACKEND / hitl=$HITL_MODE"
 echo
 echo "⚠️  에이전트가 떠 있는 동안 보내는 요청마다 실제 OpenAI API가 호출되어 계정에"
-echo "   비용이 청구됩니다 (결제 수단 연결 여부·키가 본인 계정 것인지 확인하세요)."
+echo "   비용이 청구됩니다. 이미지 1장당 호출 약 8회이며, 결제 수단·키 소유자를 확인하세요."
 read -r -p "계속하시겠습니까? [y/N] " CONFIRM
 case "$CONFIRM" in
     [yY]|[yY][eE][sS]) ;;

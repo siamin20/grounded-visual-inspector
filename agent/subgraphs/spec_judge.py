@@ -6,18 +6,13 @@ from typing import Any
 
 from langsmith import traceable
 
-from agent.nodes.common import _cost, _tokens, load_type_map
+from agent.nodes.common import (
+    _cost,
+    _tokens,
+    is_readable_observation,
+    load_type_map,
+)
 from agent.state import AgentState
-
-
-def _is_unreadable(observation: dict) -> bool:
-    return (
-        "판독 불가" in str(observation.get("text", ""))
-        or (
-            not observation.get("features")
-            and observation.get("anomaly_seen") is None
-        )
-    )
 
 
 def _mark_tasks_done(tasks: list[dict], indices: set[int]) -> list[dict]:
@@ -34,40 +29,76 @@ def _mark_tasks_done(tasks: list[dict], indices: set[int]) -> list[dict]:
 def _validated_judgement(raw: Any, spec_hits: list[dict], item: str) -> tuple[dict, bool]:
     """LLM이 검색 결과 밖의 조항·유형을 인용하지 못하게 교정한다."""
     source = raw if isinstance(raw, dict) else {}
-    raw_violations = source.get("violations", [])
-    if not isinstance(raw_violations, list):
-        raw_violations = []
-    allowed_clauses = {
-        str(hit["clause_id"])
+    original_violations = source.get("violations")
+    violations_are_list = isinstance(original_violations, list)
+    violations_are_strings = violations_are_list and all(
+        isinstance(value, str) for value in original_violations
+    )
+    raw_violations = original_violations if violations_are_strings else []
+    raw_defect_type = source.get("defect_type")
+    rationale = source.get("rationale")
+    shape_valid = (
+        isinstance(raw, dict)
+        and {"violations", "defect_type", "rationale"} <= set(source)
+        and violations_are_strings
+        and (raw_defect_type is None or isinstance(raw_defect_type, str))
+        and isinstance(rationale, str)
+        and bool(rationale.strip())
+    )
+    clause_types = {
+        str(hit["clause_id"]): str(hit["defect_type"])
         for hit in spec_hits
         if hit.get("clause_id") is not None
+        and hit.get("item") == item
+        and isinstance(hit.get("defect_type"), str)
         and hit.get("defect_type") != "good"
     }
     violations = list(dict.fromkeys(
-        str(clause_id)
-        for clause_id in raw_violations
-        if str(clause_id) in allowed_clauses
+        clause_id for clause_id in raw_violations if clause_id in clause_types
     ))
+    all_claims_supported = bool(raw_violations) and all(
+        clause_id in clause_types for clause_id in raw_violations
+    )
 
     type_map = load_type_map()
-    allowed_types = set(type_map.get(item, {}))
-    raw_defect_type = source.get("defect_type")
+    allowed_types = set(type_map.get(item, {})) - {"good"}
+    matching_types = {clause_types[clause_id] for clause_id in violations}
     defect_type = (
         raw_defect_type
-        if violations
+        if all_claims_supported
+        and violations
         and isinstance(raw_defect_type, str)
         and raw_defect_type in allowed_types
+        and matching_types == {raw_defect_type}
         else None
     )
+    no_claim = (
+        shape_valid
+        and raw_violations == []
+        and raw_defect_type is None
+    )
+    if (
+        shape_valid
+        and all_claims_supported
+        and violations
+        and defect_type is not None
+    ):
+        status = "grounded"
+    elif no_claim:
+        status = "none"
+    else:
+        status = "invalid"
     corrected = (
-        violations != [str(value) for value in raw_violations]
+        not shape_valid
+        or violations != raw_violations
         or defect_type != raw_defect_type
-        or not isinstance(raw, dict)
+        or status == "invalid"
     )
     judgement = {
         "violations": violations,
         "defect_type": defect_type,
-        "rationale": str(source.get("rationale", "")),
+        "rationale": rationale.strip() if isinstance(rationale, str) else "",
+        "status": status,
     }
     return judgement, corrected
 
@@ -81,7 +112,11 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         *state.get("observations", []),
         *observer_result.get("observations", []),
     ]
-    readable = [observation for observation in observations if not _is_unreadable(observation)]
+    readable = [
+        observation
+        for observation in observations
+        if is_readable_observation(observation)
+    ]
     observations_text = "\n".join(
         str(observation.get("text", "")).strip()
         for observation in readable
@@ -114,6 +149,7 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
             "violations": [],
             "defect_type": None,
             "rationale": "관찰 없음",
+            "status": "none",
         }
         corrected = False
 
@@ -171,6 +207,7 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         "clause_ids": clause_ids,
         "violations": judgement["violations"],
         "defect_type": judgement["defect_type"],
+        "judgement_status": judgement["status"],
         "corrected": corrected,
     }
     events = [
@@ -184,6 +221,7 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         "cross_check": cross_check,
         "spec_hits": spec_hits,
         "judgement": judgement,
+        "judgement_status": judgement["status"],
         "tasks": tasks,
         "retry_count": retry_count,
         "parallel_elapsed": parallel_elapsed,

@@ -26,9 +26,14 @@ if [ ! -f .env ]; then
     exit 1
 fi
 set -a; source .env; set +a
-export LANGCHAIN_PROJECT="capstone-all-total-ollama"   # fake 모드와 프로젝트 분리
+export LLM_BACKEND="ollama"
+export VLM_BACKEND="${VLM_BACKEND:-ollama}"
+export EMBED_BACKEND="${EMBED_BACKEND:-ollama}"
+export HITL_MODE="${HITL_MODE:-interactive}"
+export LANGCHAIN_PROJECT="grounded-visual-inspector-ollama"
 echo "LangSmith: project=$LANGCHAIN_PROJECT tracing=${LANGCHAIN_TRACING_V2:-}"
 echo "모델: fast=$FAST_MODEL / quality=$QUALITY_MODEL"
+echo "백엔드: llm=$LLM_BACKEND / vlm=$VLM_BACKEND / embed=$EMBED_BACKEND / hitl=$HITL_MODE"
 
 # ── 1) Ollama 데몬 확인 (없으면 기동) ──────────────────────────────────
 STARTED_OLLAMA=""

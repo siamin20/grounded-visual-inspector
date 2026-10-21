@@ -37,7 +37,7 @@ def _after_validate(state: AgentState) -> str:
         return "write"
     approval = state.get("approval") or {}
     if approval.get("required") and approval.get("decision") is None:
-        # 재작성 상한 뒤 low confidence로 강제 통과한 보고서도 사람 승인을 거친다.
+        # 재작성 상한 뒤 만든 validation_failure ABSTAIN도 사람 승인을 거친다.
         return "hitl"
     return "finalize"
 

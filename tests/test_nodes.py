@@ -15,9 +15,15 @@ from agent.graph import _after_validate
 from agent.nodes.analysis import analysis_node
 from agent.nodes.finalize import finalize_node
 from agent.nodes.hitl import hitl_node
+from agent.nodes.report_contract import deterministic_summary
 from agent.nodes.route import route_node
 from agent.nodes.validate import validate_node
-from agent.nodes.write import write_node
+from agent.nodes.write import (
+    _enforce_decision_contract,
+    _parse_report,
+    _split_report_observations,
+    write_node,
+)
 from agent.state import AgentState
 
 
@@ -32,6 +38,7 @@ class DuplicateObservationLLM:
             "verdict": "PASS",
             "defect_type": None,
             "confidence": "high",
+            "abstain_reason": None,
             "observations": [
                 {"text": "같은 관찰", "source_call_id": "obs-tl"},
                 {"text": "같은 관찰", "source_call_id": ["obs-tr", "obs-tl"]},
@@ -49,12 +56,92 @@ class DuplicateObservationLLM:
         return draft, {"usd": 0.0, "prompt": "test"}
 
 
+class InvalidActionLLM:
+    async def write_report(self, context, _attempt, _feedback, on_token=None):
+        observation = context["observations"][0]
+        report = {
+            "verdict": "REJECT",
+            "defect_type": context["defect_type"],
+            "confidence": "high",
+            "abstain_reason": None,
+            "observations": [{
+                "text": observation["text"],
+                "source_call_id": observation["call_id"],
+            }],
+            "spec_clauses": list(context["judgement"]["violations"]),
+            "actions": ["재작업"],
+            "lot": {"lot_id": "FORGED"},
+            "summary": "관찰에 없는 사실",
+        }
+        draft = json.dumps(report, ensure_ascii=False)
+        if on_token is not None:
+            on_token(draft)
+        return draft, {"usd": 0.0, "prompt": "test"}
+
+
+class StaticGuideMCP:
+    async def find_resource_template(self, _name):
+        return "vision", "guide://{defect_type}"
+
+    async def read_resource(self, _uri, server):
+        assert server == "vision"
+        return "# broken_large 조치 가이드\n- 조치 옵션: 폐기 | 라인정지\n"
+
+
+@pytest.mark.parametrize("constant", ["NaN", "Infinity", "-Infinity"])
+def test_report_parser_rejects_nonstandard_json_numbers(constant: str) -> None:
+    with pytest.raises(ValueError):
+        _parse_report('{"verdict":"PASS","model_score":' + constant + "}")
+
+
+def test_report_canonicalizer_strips_unknown_keys() -> None:
+    raw = {
+        "verdict": "PASS",
+        "defect_type": None,
+        "confidence": "high",
+        "abstain_reason": None,
+        "observations": [{
+            "text": "surface appears normal",
+            "source_call_id": "obs-full",
+            "score": float("nan"),
+        }],
+        "spec_clauses": [],
+        "actions": ["pass"],
+        "lot": {},
+        "summary": "normal",
+        "model_score": float("inf"),
+    }
+
+    canonical = _enforce_decision_contract(
+        _split_report_observations(raw),
+        {
+            "verdict": "PASS",
+            "confidence": "high",
+            "lot": {},
+        },
+    )
+
+    assert set(canonical) == {
+        "verdict",
+        "defect_type",
+        "confidence",
+        "abstain_reason",
+        "observations",
+        "spec_clauses",
+        "actions",
+        "lot",
+        "summary",
+    }
+    assert set(canonical["observations"][0]) == {"text", "source_call_id"}
+
+
 def _valid_state() -> dict:
     text = "목 부위에 선형 긁힘이 보입니다."
     return {
         "item": "screw",
         "observations": [{
             "call_id": "obs-full",
+            "region": "full",
             "text": text,
             "anomaly_seen": True,
             "regions": ["tl"],
@@ -73,15 +160,21 @@ def _valid_state() -> dict:
         "verdict": "REJECT",
         "defect_type": "scratch_neck",
         "confidence": "high",
+        "abstain_reason": None,
         "report": {
             "verdict": "REJECT",
             "defect_type": "scratch_neck",
             "confidence": "high",
+            "abstain_reason": None,
             "observations": [{"text": text, "source_call_id": "obs-full"}],
             "spec_clauses": ["SCREW-04"],
             "actions": ["재작업"],
             "lot": {},
-            "summary": "목 부위 긁힘으로 재작업이 필요합니다.",
+            "summary": (
+                "관찰 근거(목 부위에 선형 긁힘이 보입니다.)와 위반 조항(SCREW-04)"
+                "을 바탕으로 scratch_neck 결함을 REJECT로 판정하고 "
+                "재작업 조치를 요청합니다."
+            ),
         },
         "events": [],
         "validation_attempts": 1,
@@ -127,6 +220,7 @@ async def test_analysis_treats_none_cross_result_as_disagreement() -> None:
     assert result["confidence"] == "low"
 
     state["cross_check"] = {}
+    state["ablation"] = "no_cross"
     result = await analysis_node(state, None)
     assert result["confidence"] == "high"
     assert result["events"][-1]["cross_check_skipped"] is True
@@ -143,11 +237,12 @@ async def test_validate_rejects_embellished_observation_and_forces_after_three()
     assert any("근거 없는 관찰" in error for error in rejected["validation_errors"])
 
     state["validation_attempts"] = 3
-    forced = await validate_node(state, deps)
-    assert forced["validation_passed"] is True
-    assert forced["report"]["confidence"] == "low"
-    assert forced["approval"]["required"] is True
-    assert forced["validation_feedback"] is None
+    abstained = await validate_node(state, deps)
+    assert abstained["validation_passed"] is True
+    assert abstained["report"]["verdict"] == "ABSTAIN"
+    assert abstained["report"]["actions"] == ["재검사"]
+    assert abstained["approval"]["required"] is True
+    assert abstained["validation_feedback"] is None
 
 
 @pytest.mark.asyncio
@@ -169,7 +264,10 @@ async def test_no_validate_records_would_fail_and_auto_reject_loops_once() -> No
     state.update(first)
     second = await hitl_node(state, hitl_deps)
     assert second["approval"]["decision"] == "approve"
-    assert "hitl_rejections" not in second
+    assert [event["type"] for event in second["events"][-2:]] == [
+        "ApprovalRequired",
+        "ApprovalResolved",
+    ]
 
 
 @pytest.mark.asyncio
@@ -194,7 +292,64 @@ async def test_writer_cannot_override_code_decision_or_crash_hitl() -> None:
 
 
 @pytest.mark.asyncio
-async def test_write_merges_exact_observations_and_preserves_all_call_ids(
+async def test_write_keeps_one_source_id_per_observation(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "agent.nodes.write.get_stream_writer", lambda: lambda _event: None
+    )
+    state = {
+        "query": "검사해줘",
+        "item": "screw",
+        "lot": {"lot_id": "LOT-001", "meta": {"line": "L1"}},
+        "observations": [],
+        "cross_check": {},
+        "spec_hits": [],
+        "judgement": {},
+        "verdict": "PASS",
+        "defect_type": None,
+        "confidence": "high",
+        "abstain_reason": None,
+        "events": [],
+        "validation_attempts": 0,
+        "cost_usd": 0.0,
+    }
+    result = await write_node(
+        state,
+        SimpleNamespace(quality_llm=DuplicateObservationLLM()),
+    )
+
+    assert result["report"]["observations"] == [
+        {
+            "text": "같은 관찰",
+            "source_call_id": "obs-tl",
+        },
+        {
+            "text": "같은 관찰",
+            "source_call_id": "obs-tr",
+        },
+        {
+            "text": "같은 관찰 ",
+            "source_call_id": "obs-space",
+        },
+        {
+            "text": "다른 관찰",
+            "source_call_id": "obs-full",
+        },
+    ]
+    assert result["report"]["lot"] == {
+        "lot_id": "LOT-001",
+        "meta": {"line": "L1"},
+    }
+    assert result["report"]["summary"] == (
+        "관찰 근거(같은 관찰 / 다른 관찰)를 바탕으로 PASS로 판정하고 "
+        "통과를 요청합니다."
+    )
+    assert result["draft"] == json.dumps(result["report"], ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_write_freezes_only_the_first_pre_validation_report(
     monkeypatch,
 ) -> None:
     monkeypatch.setattr(
@@ -211,40 +366,143 @@ async def test_write_merges_exact_observations_and_preserves_all_call_ids(
         "verdict": "PASS",
         "defect_type": None,
         "confidence": "high",
+        "abstain_reason": None,
         "events": [],
         "validation_attempts": 0,
         "cost_usd": 0.0,
+        "tokens": 0,
+        "pre_validation_snapshot": {},
     }
+
+    first = await write_node(
+        state,
+        SimpleNamespace(quality_llm=DuplicateObservationLLM()),
+    )
+    snapshot = first["pre_validation_snapshot"]
+    assert snapshot["stage"] == "before_validate"
+    assert snapshot["report"] == first["report"]
+    assert len(snapshot["report_sha256"]) == 64
+
+    # 보고서 객체를 바꿔도 불변 스냅샷은 따라가지 않는다.
+    first["report"]["summary"] = "재작성된 요약"
+    assert snapshot["report"]["summary"] != first["report"]["summary"]
+
+    rewritten_state = {**state, **first, "pre_validation_snapshot": snapshot}
+    second = await write_node(
+        rewritten_state,
+        SimpleNamespace(quality_llm=DuplicateObservationLLM()),
+    )
+    assert "pre_validation_snapshot" not in second
+
+
+@pytest.mark.asyncio
+async def test_write_uses_conservative_guide_action_and_canonical_draft(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "agent.nodes.write.get_stream_writer", lambda: lambda _event: None
+    )
+    state = _valid_state()
+    state.update(
+        item="bottle",
+        lot={"lot_id": "LOT-BOTTLE-001"},
+        defect_type="broken_large",
+        judgement={
+            "violations": ["BOTTLE-03"],
+            "defect_type": "broken_large",
+        },
+    )
+
+    result = await write_node(
+        state,
+        SimpleNamespace(quality_llm=InvalidActionLLM(), mcp=StaticGuideMCP()),
+    )
+
+    assert result["report"]["actions"] == ["라인정지"]
+    assert result["report"]["lot"] == {"lot_id": "LOT-BOTTLE-001"}
+    assert result["report"]["summary"] == deterministic_summary(result["report"])
+    assert result["draft"] == json.dumps(result["report"], ensure_ascii=False)
+
+
+@pytest.mark.asyncio
+async def test_write_enforces_abstain_and_clears_previous_approval(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "agent.nodes.write.get_stream_writer", lambda: lambda _event: None
+    )
+    state = _valid_state()
+    state.update(
+        verdict="ABSTAIN",
+        defect_type=None,
+        confidence="low",
+        abstain_reason="insufficient_visual_evidence",
+        approval={"required": True, "decision": "approve", "note": "이전 초안"},
+    )
     result = await write_node(
         state,
         SimpleNamespace(quality_llm=DuplicateObservationLLM()),
     )
 
-    assert result["report"]["observations"] == [
-        {
-            "text": "같은 관찰",
-            "source_call_id": ["obs-tl", "obs-tr"],
-        },
-        {
-            "text": "같은 관찰 ",
-            "source_call_id": ["obs-space"],
-        },
-        {
-            "text": "다른 관찰",
-            "source_call_id": ["obs-full"],
-        },
-    ]
+    assert result["report"]["verdict"] == "ABSTAIN"
+    assert result["report"]["defect_type"] is None
+    assert result["report"]["confidence"] == "low"
+    assert result["report"]["abstain_reason"] == "insufficient_visual_evidence"
+    assert result["report"]["spec_clauses"] == []
+    assert result["report"]["actions"] == ["재검사"]
+    assert result["approval"] == {
+        "required": False,
+        "decision": None,
+        "note": "",
+    }
+    assert result["reapproval_required"] is True
 
 
 @pytest.mark.asyncio
-async def test_validate_and_finalize_accept_merged_and_legacy_source_ids() -> None:
+async def test_finalize_labels_abstain_as_pending_reinspection() -> None:
     state = _valid_state()
+    state["report"].update(
+        verdict="ABSTAIN",
+        defect_type=None,
+        confidence="low",
+        abstain_reason="validation_failure",
+        spec_clauses=[],
+        actions=["재검사"],
+    )
+
+    result = await finalize_node(state, None)
+
+    assert "판정 보류 — 재검사 필요 (ABSTAIN)" in result["final"]
+    assert "보류 사유: validation_failure" in result["final"]
+
+
+@pytest.mark.asyncio
+async def test_validate_and_finalize_keep_same_text_sources_separate() -> None:
+    state = _valid_state()
+    source_text = state["observations"][0]["text"]
+    state["observations"] = [
+        {
+            **state["observations"][0],
+            "call_id": source_id,
+            "region": region,
+        }
+        for source_id, region in (("obs-tl", "tl"), ("obs-tr", "tr"))
+    ]
     state["report"]["observations"] = [
         {
-            "text": state["observations"][0]["text"],
-            "source_call_id": ["obs-tl", "obs-tr"],
-        }
+            "text": source_text,
+            "source_call_id": "obs-tl",
+        },
+        {
+            "text": source_text,
+            "source_call_id": "obs-tr",
+        },
     ]
+    state["report"]["summary"] = (
+        "관찰 근거(목 부위에 선형 긁힘이 보입니다.)와 위반 조항(SCREW-04)"
+        "을 바탕으로 scratch_neck 결함을 REJECT로 판정하고 "
+        "재작업 조치를 요청합니다."
+    )
     validated = await validate_node(
         state, SimpleNamespace(vector_store=ClauseStore(), ablation="")
     )
@@ -252,13 +510,14 @@ async def test_validate_and_finalize_accept_merged_and_legacy_source_ids() -> No
 
     state["report"]["observations"].append(
         {
-            "text": state["observations"][0]["text"],
-            "source_call_id": "obs-full",
+            "text": state["cross_check"]["summary"],
+            "source_call_id": "cc-full",
         }
     )
     finalized = await finalize_node(state, None)
-    assert "(`obs-tl`, `obs-tr`)" in finalized["final"]
-    assert "(`obs-full`)" in finalized["final"]
+    assert "(`obs-tl`)" in finalized["final"]
+    assert "(`obs-tr`)" in finalized["final"]
+    assert "(`cc-full`)" in finalized["final"]
 
 
 @pytest.mark.asyncio
@@ -306,11 +565,11 @@ async def test_hitl_interrupts_once_and_resume_only_resolves_approval() -> None:
         config=reject_config,
     )
     assert rejected["hitl_rejections"] == 1
-    after_rewrite = await hitl_node(
-        rejected, SimpleNamespace(hitl_mode="interactive")
-    )
-    assert after_rewrite["approval"]["decision"] == "approve"
-    assert "events" not in after_rewrite
+    # write가 새 초안을 만들면 approval을 초기화하므로 재작성본은 다시 중단한다.
+    rejected["approval"] = {"required": False, "decision": None, "note": ""}
+    rewrite_config = {"configurable": {"thread_id": f"hitl-{uuid.uuid4()}"}}
+    rewritten_pause = await graph.ainvoke(rejected, config=rewrite_config)
+    assert len(rewritten_pause["__interrupt__"]) == 1
 
 
 @pytest.mark.asyncio

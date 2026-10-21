@@ -33,12 +33,18 @@ class AgentState(TypedDict, total=False):
     cross_check: dict
     spec_hits: list[dict]
     judgement: dict
+    judgement_status: str
     verdict: str
     defect_type: str | None
     confidence: str
+    abstain_reason: str | None
+    observer_status: str
+    cross_status: str
     report: dict
     approval: dict
+    reapproval_required: bool
     validation_errors: list[str]
+    pre_validation_snapshot: dict[str, Any]
     ablation: str
     hitl_rejections: int
 

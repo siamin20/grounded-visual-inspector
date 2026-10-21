@@ -227,13 +227,35 @@ class QualityLLM(FakeLLM):
                 "source_call_id": "hallucinated-observation",
             })
 
-        verdict = ctx.get("verdict") if ctx.get("verdict") in {"PASS", "REJECT"} else "PASS"
+        verdict = (
+            ctx.get("verdict")
+            if ctx.get("verdict") in {"PASS", "REJECT", "ABSTAIN"}
+            else "ABSTAIN"
+        )
         defect_type = ctx.get("defect_type") if verdict == "REJECT" else None
-        confidence = ctx.get("confidence") if ctx.get("confidence") in {"high", "low"} else "low"
+        confidence = (
+            "low" if verdict == "ABSTAIN"
+            else ctx.get("confidence")
+            if ctx.get("confidence") in {"high", "low"}
+            else "low"
+        )
+        abstain_reason = (
+            ctx.get("abstain_reason")
+            if verdict == "ABSTAIN"
+            and ctx.get("abstain_reason") in {
+                "insufficient_visual_evidence",
+                "ungrounded_anomaly",
+                "evidence_conflict",
+                "validation_failure",
+            }
+            else "validation_failure" if verdict == "ABSTAIN" else None
+        )
         judgement = ctx.get("judgement") if isinstance(ctx.get("judgement"), dict) else {}
         actions = _guide_actions(str(ctx.get("guide_text", "")), verdict)
         if verdict == "PASS":
             summary = "관찰과 기준서 비교 결과 확인된 결함이 없어 통과로 판정합니다."
+        elif verdict == "ABSTAIN":
+            summary = "근거가 충분하지 않아 판정을 보류하고 재검사를 요청합니다."
         else:
             summary = (
                 f"관찰 결과 {defect_type or '유형 미상'} 후보가 기준서 위반으로 "
@@ -243,11 +265,16 @@ class QualityLLM(FakeLLM):
             "verdict": verdict,
             "defect_type": defect_type,
             "confidence": confidence,
+            "abstain_reason": abstain_reason,
             "observations": observations,
-            "spec_clauses": [
-                clause_id for clause_id in judgement.get("violations", [])
-                if isinstance(clause_id, str)
-            ],
+            "spec_clauses": (
+                [
+                    clause_id for clause_id in judgement.get("violations", [])
+                    if isinstance(clause_id, str)
+                ]
+                if verdict == "REJECT"
+                else []
+            ),
             "actions": actions,
             "lot": ctx.get("lot") if isinstance(ctx.get("lot"), dict) else {},
             "summary": summary,
@@ -305,6 +332,8 @@ def _guide_actions(guide_text: str, verdict: str) -> list[str]:
     """가이드의 ``조치 옵션`` 순서에서 첫 조치를 고른다."""
     if verdict == "PASS":
         return ["통과"]
+    if verdict == "ABSTAIN":
+        return ["재검사"]
     allowed = {"재작업", "폐기", "라인정지"}
     match = re.search(r"조치\s*옵션\s*:\s*([^\n]+)", guide_text)
     if match:

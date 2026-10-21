@@ -76,6 +76,7 @@
   }
   .badge.pass { background: #245c3d; color: #b8f3cb; }
   .badge.reject { background: #71363f; color: #ffd0d4; }
+  .badge.abstain { background: #4a4a57; color: #ececf4; }
   .chips { display: flex; flex-wrap: wrap; gap: 5px; }
   .muted { color: #9292ad; font-size: 12px; }
   .approval-card { border-color: #8b6d34; background: #302b22; }
@@ -123,13 +124,24 @@
         <div class="bubble">{{ item.text }}</div>
       </div>
 
+      <div v-else-if="item.kind === 'draft'" class="event-card muted">
+        <div class="event-title">검증 전 초안 (확정 아님)</div>
+        <div>{{ item.text }}</div>
+      </div>
+
       <div v-else-if="item.kind === 'observation'" class="event-card">
         <div class="event-title"><span class="badge">{{ item.region }}</span> Observer 관찰</div>
         <div>{{ item.text }}</div>
       </div>
 
       <div v-else-if="item.kind === 'cross'" class="event-card">
-        <div class="event-title">Cross-Checker <span class="badge" :class="item.agree ? 'pass' : 'reject'">{{ item.agree ? '일치' : '불일치' }}</span></div>
+        <div class="event-title">
+          Cross-Checker
+          <span
+            class="badge"
+            :class="item.skipped ? '' : item.agree === true ? 'pass' : item.agree === false ? 'reject' : ''"
+          >{{ item.skipped ? '생략' : item.agree === true ? '일치' : item.agree === false ? '불일치' : '판정 대기' }}</span>
+        </div>
         <div class="muted">{{ item.text }}</div>
       </div>
 
@@ -139,7 +151,10 @@
       </div>
 
       <div v-else-if="item.kind === 'analysis'" class="event-card">
-        <div class="event-title">판정 <span class="badge" :class="item.verdict === 'PASS' ? 'pass' : 'reject'">{{ item.verdict }}</span> <span class="badge">{{ item.confidence }}</span></div>
+        <div class="event-title">판정 <span class="badge" :class="verdictClass(item.verdict)">{{ verdictLabel(item.verdict) }}</span> <span class="badge">{{ item.confidence }}</span></div>
+        <div v-if="item.verdict === 'ABSTAIN'" class="muted">
+          판정 보류 · {{ abstainReasonLabel(item.abstainReason) }} · 재검사 필요
+        </div>
       </div>
 
       <div v-else-if="item.kind === 'validation'" class="event-card muted">
@@ -147,12 +162,15 @@
       </div>
 
       <div v-else-if="item.kind === 'approval'" class="approval-card">
-        <div class="event-title">관리자 승인 필요 <span class="badge">{{ item.report.verdict || '검토' }}</span></div>
+        <div class="event-title">관리자 승인 필요 <span class="badge" :class="verdictClass(item.report.verdict)">{{ verdictLabel(item.report.verdict) }}</span></div>
         <div>{{ item.report.summary || '제안된 조치를 확인해 주세요.' }}</div>
+        <div v-if="item.report.verdict === 'ABSTAIN'" class="muted">
+          판정 보류 · {{ abstainReasonLabel(item.report.abstain_reason) }} · 재검사 필요
+        </div>
         <div v-if="item.report.actions?.length" class="muted">조치: {{ item.report.actions.join(', ') }}</div>
         <div v-if="item.status" class="muted">{{ item.status }}</div>
         <div v-if="!item.resolved" class="approval-actions">
-          <button type="button" :disabled="item.resolving" @click="resumeApproval(item, 'approve')">승인</button>
+          <button type="button" :disabled="item.resolving" @click="resumeApproval(item, 'approve')">{{ item.report.verdict === 'ABSTAIN' ? '재검사 확인' : '승인' }}</button>
           <button type="button" class="reject-button" :disabled="item.resolving" @click="resumeApproval(item, 'reject')">반려</button>
         </div>
       </div>
@@ -226,6 +244,28 @@ createApp({
       if (logEl.value) logEl.value.scrollTop = logEl.value.scrollHeight;
     }
 
+    function verdictClass(verdict) {
+      if (verdict === 'PASS') return 'pass';
+      if (verdict === 'REJECT') return 'reject';
+      if (verdict === 'ABSTAIN') return 'abstain';
+      return '';
+    }
+
+    function verdictLabel(verdict) {
+      if (verdict === 'ABSTAIN') return '판정 보류';
+      return verdict || '검토';
+    }
+
+    function abstainReasonLabel(reason) {
+      const labels = {
+        insufficient_visual_evidence: '시각 근거 부족',
+        ungrounded_anomaly: '기준서 근거 없는 이상',
+        evidence_conflict: '근거 충돌',
+        validation_failure: '보고서 검증 실패',
+      };
+      return labels[reason] || '사유 확인 필요';
+    }
+
     function addError(message) {
       log.value.push({ id: nextId++, kind: 'agent', text: `요청 처리 중 오류가 발생했습니다.\n${message}` });
       sending.value = false;
@@ -240,8 +280,6 @@ createApp({
         stepsItem,
         streamItem: null,
         streamAttempt: null,
-        observerFlags: [],
-        observerRegions: new Set(),
         approvalCard: null,
         decision: null,
         paused: false,
@@ -272,7 +310,8 @@ createApp({
     function handleEvent(event, ctx) {
       if (event.type === 'AnswerToken') {
         if (!ctx.streamItem || ctx.streamAttempt !== event.attempt) {
-          ctx.streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
+          const kind = Number.isInteger(event.attempt) ? 'draft' : 'agent';
+          ctx.streamItem = reactive({ id: nextId++, kind, text: '' });
           log.value.push(ctx.streamItem);
           ctx.streamAttempt = event.attempt;
         }
@@ -282,8 +321,6 @@ createApp({
       }
 
       if (event.type === 'ObservationReady') {
-        ctx.observerFlags.push(event.anomaly_seen);
-        for (const region of event.regions || []) ctx.observerRegions.add(region);
         log.value.push({
           id: nextId++, kind: 'observation', region: event.region || 'full',
           text: observationText(event),
@@ -293,14 +330,8 @@ createApp({
       }
 
       if (event.type === 'CrossCheckDone') {
-        const anomaly = ctx.observerFlags.some(value => value === true);
-        const sameAnomaly = anomaly === event.anomaly_seen;
-        const overlap = (event.regions || []).some(region => ctx.observerRegions.has(region));
-        const agree = typeof event.agree === 'boolean'
-          ? event.agree
-          : event.skipped ? true : sameAnomaly && (!anomaly || overlap);
         log.value.push({
-          id: nextId++, kind: 'cross', agree,
+          id: nextId++, kind: 'cross', agree: null, skipped: event.skipped === true,
           text: event.skipped
             ? '비교 관찰이 생략되었습니다.'
             : event.summary || `${event.regions?.length ? `관찰 영역: ${event.regions.join(', ')}` : '관찰 영역 없음'}`,
@@ -318,8 +349,13 @@ createApp({
       }
 
       if (event.type === 'AnalysisDecided') {
+        const crossCard = [...log.value].reverse().find(item => item.kind === 'cross');
+        if (crossCard && !crossCard.skipped) {
+          crossCard.agree = typeof event.agree === 'boolean' ? event.agree : null;
+        }
         log.value.push({
-          id: nextId++, kind: 'analysis', verdict: event.verdict, confidence: event.confidence,
+          id: nextId++, kind: 'analysis', verdict: event.verdict,
+          confidence: event.confidence, abstainReason: event.abstain_reason,
         });
         scrollToBottom();
         return;
@@ -337,7 +373,8 @@ createApp({
         if (event.required === false) return;
         const card = reactive({
           id: nextId++, kind: 'approval', report: event.report || {}, resolving: false,
-          resolved: false, status: '',
+          resolved: false, approvalId: event.approval_id,
+          status: '',
         });
         ctx.approvalCard = card;
         log.value.push(card);
@@ -349,7 +386,7 @@ createApp({
       if (event.type === 'ApprovalResolved') resolveApproval(event, ctx);
 
       if (event.type === 'FinalAnswer') {
-        if (!ctx.streamItem) {
+        if (!ctx.streamItem || ctx.streamItem.kind === 'draft') {
           ctx.streamItem = reactive({ id: nextId++, kind: 'agent', text: '' });
           log.value.push(ctx.streamItem);
         }
@@ -488,7 +525,9 @@ createApp({
         const response = await fetch('/chat/resume', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ thread_id: thread, decision, note: '' }),
+          body: JSON.stringify({
+            thread_id: thread, approval_id: card.approvalId, decision, note: '',
+          }),
         });
         await consumeFetch(response, ctx);
       } catch (error) {
@@ -504,6 +543,7 @@ createApp({
       backendLabel, log, input, sending, paused, logEl, fileInput,
       selectedItem, selectedFile, selectedPreview,
       onSubmit, onFileChange, onInspect, resumeApproval,
+      verdictClass, verdictLabel, abstainReasonLabel,
     };
   },
 }).mount('#app');

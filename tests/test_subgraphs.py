@@ -195,7 +195,120 @@ def test_spec_judge_never_accepts_good_clause_as_violation() -> None:
     )
     assert judgement["violations"] == []
     assert judgement["defect_type"] is None
+    assert judgement["status"] == "invalid"
     assert corrected is True
+
+
+@pytest.mark.parametrize(
+    ("hit", "defect_type"),
+    [
+        ({
+            "clause_id": "SCREW-03",
+            "item": "bottle",
+            "defect_type": "scratch_neck",
+        }, "scratch_neck"),
+        ({
+            "clause_id": "SCREW-03",
+            "item": "screw",
+            "defect_type": "scratch_neck",
+        }, "scratch_head"),
+    ],
+)
+def test_spec_judge_rejects_item_or_clause_type_mismatch(
+    hit: dict,
+    defect_type: str,
+) -> None:
+    judgement, corrected = _validated_judgement(
+        {
+            "violations": ["SCREW-03"],
+            "defect_type": defect_type,
+            "rationale": "모순 테스트",
+        },
+        [hit],
+        "screw",
+    )
+
+    assert judgement["status"] == "invalid"
+    assert judgement["defect_type"] is None
+    assert corrected is True
+
+
+def test_spec_judge_rejects_mixed_supported_and_unknown_claim() -> None:
+    judgement, corrected = _validated_judgement(
+        {
+            "violations": ["SCREW-03", "MADE-UP-99"],
+            "defect_type": "scratch_neck",
+            "rationale": "유효·무효 조항이 섞임",
+        },
+        [{
+            "clause_id": "SCREW-03",
+            "item": "screw",
+            "defect_type": "scratch_neck",
+        }],
+        "screw",
+    )
+
+    assert judgement["violations"] == ["SCREW-03"]
+    assert judgement["defect_type"] is None
+    assert judgement["status"] == "invalid"
+    assert corrected is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        None,
+        [],
+        {},
+        {"violations": [], "defect_type": None},
+        {
+            "violations": "SCREW-03",
+            "defect_type": "scratch_neck",
+            "rationale": "x",
+        },
+        {"violations": [{}], "defect_type": "scratch_neck", "rationale": "x"},
+        {"violations": [], "defect_type": "scratch_neck", "rationale": "x"},
+        {"violations": ["SCREW-03"], "defect_type": None, "rationale": "x"},
+        {
+            "violations": ["SCREW-03"],
+            "defect_type": "scratch_head",
+            "rationale": "x",
+        },
+        {
+            "violations": ["MADE-UP-99"],
+            "defect_type": "scratch_neck",
+            "rationale": "x",
+        },
+    ],
+)
+def test_spec_judge_malformed_or_contradictory_claim_is_invalid(raw) -> None:
+    judgement, corrected = _validated_judgement(
+        raw,
+        [{
+            "clause_id": "SCREW-03",
+            "item": "screw",
+            "defect_type": "scratch_neck",
+        }],
+        "screw",
+    )
+
+    assert judgement["status"] == "invalid"
+    assert corrected is True
+
+
+def test_spec_judge_accepts_only_explicit_well_formed_no_claim() -> None:
+    judgement, corrected = _validated_judgement(
+        {
+            "violations": [],
+            "defect_type": None,
+            "rationale": "no matching violation",
+        },
+        [],
+        "screw",
+    )
+
+    assert judgement["status"] == "none"
+    assert corrected is False
 
 
 @pytest.mark.asyncio
@@ -228,6 +341,8 @@ async def test_research_runs_observer_and_cross_before_spec_judge(
     assert len(result["spec_hits"]) == 3
     assert result["judgement"]["violations"] == ["SCREW-03"]
     assert result["judgement"]["defect_type"] == "scratch_neck"
+    assert result["judgement"]["status"] == "grounded"
+    assert result["judgement_status"] == "grounded"
     assert all(task["status"] == "done" for task in result["tasks"])
     assert result["retry_count"] == 3
     assert result["parallel_elapsed"] >= 0.25
@@ -340,9 +455,11 @@ async def test_spec_judge_corrects_ids_and_defect_type_outside_allowed_sets() ->
         "violations": ["SCREW-03"],
         "defect_type": None,
         "rationale": "교정 테스트",
+        "status": "invalid",
     }
     judged = next(event for event in result["events"] if event["type"] == "SpecJudged")
     assert judged["corrected"] is True
+    assert judged["judgement_status"] == "invalid"
     assert "MADE-UP-99" not in judged["violations"]
 
 
@@ -358,6 +475,8 @@ async def test_all_unreadable_observations_skip_search_and_judgement() -> None:
         "violations": [],
         "defect_type": None,
         "rationale": "관찰 없음",
+        "status": "none",
     }
+    assert result["judgement_status"] == "none"
     assert deps.vector_store.search_calls == []
     assert deps.fast_llm.calls == []

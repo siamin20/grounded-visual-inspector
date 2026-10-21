@@ -27,12 +27,14 @@ from agent.mcp_client import MCPClient
 from agent.rag import SpecIndex, make_embedder
 from agent.supervisor_v1 import run_v1
 from eval.evaluators import binary_metrics, cost_latency
+from eval.preflight import EvaluationPreflightError, guard_run_mode
 from server import _build_llms, _initial_state
 
 
 DATASET_PATH = ROOT / "eval" / "dataset.json"
 DEFAULT_RESULTS_DIR = ROOT / "eval" / "results"
 CONDITIONS = ("B0", "B1", "A", "A-X", "A-C", "A-V")
+HELDOUT_CONDITIONS = frozenset({"B0", "B1", "A"})
 ABLATIONS = {
     "A": "",
     "A-X": "no_cross",
@@ -49,11 +51,13 @@ REQUIRED_ROW_KEYS = (
     "verdict",
     "defect_type",
     "confidence",
+    "abstain_reason",
     "approval_required",
     "validation_attempts",
     "validation_errors_first",
     "would_fail",
     "observations_text",
+    "pre_validation_snapshot",
     "report",
     "latency_s",
     "tokens",
@@ -76,20 +80,27 @@ class _NullSessionStore:
         return None
 
 
-def _selected_backends() -> tuple[str, str]:
+def _selected_backends() -> tuple[str, str, str]:
     llm_backend = (os.environ.get("LLM_BACKEND") or "fake").strip().lower()
     vlm_backend = (
         os.environ.get("VLM_BACKEND") or llm_backend
     ).strip().lower()
-    return llm_backend, vlm_backend
+    embed_backend = (
+        os.environ.get("EMBED_BACKEND") or llm_backend
+    ).strip().lower()
+    return llm_backend, vlm_backend, embed_backend
 
 
 def _guard_backends(*, dry_run: bool) -> None:
-    llm_backend, vlm_backend = _selected_backends()
+    llm_backend, vlm_backend, embed_backend = _selected_backends()
     supported = {"fake", "ollama", "openai"}
     unknown = [
         f"{name}={value}"
-        for name, value in (("LLM_BACKEND", llm_backend), ("VLM_BACKEND", vlm_backend))
+        for name, value in (
+            ("LLM_BACKEND", llm_backend),
+            ("VLM_BACKEND", vlm_backend),
+            ("EMBED_BACKEND", embed_backend),
+        )
         if value not in supported
     ]
     if unknown:
@@ -99,6 +110,32 @@ def _guard_backends(*, dry_run: bool) -> None:
             "평가 결과 조작을 막기 위해 fake LLM/VLM은 거부합니다. "
             "로컬 검증은 --dry-run을 사용하세요."
         )
+
+
+def _guard_run_request(args: argparse.Namespace) -> dict[str, Any] | None:
+    if args.split == "heldout" and args.condition not in HELDOUT_CONDITIONS:
+        raise SystemExit(
+            "heldout은 사전 등록 주 조건 B0|B1|A만 실행할 수 있습니다. "
+            "A-X|A-C|A-V ablation은 dev 전용입니다."
+        )
+    llm_backend, vlm_backend, embed_backend = _selected_backends()
+    try:
+        return guard_run_mode(
+            split=args.split,
+            dry_run=args.dry_run,
+            items=args.items,
+            limit=args.limit,
+            final_run=args.final_run,
+            freeze_manifest=args.freeze_manifest,
+            backends={
+                "LLM_BACKEND": llm_backend,
+                "VLM_BACKEND": vlm_backend,
+                "EMBED_BACKEND": embed_backend,
+            },
+            dataset_path=DATASET_PATH,
+        )
+    except EvaluationPreflightError as exc:
+        raise SystemExit(f"평가 preflight 실패: {exc}") from exc
 
 
 def _load_samples(
@@ -307,11 +344,13 @@ def _empty_row(sample: dict[str, Any], condition: str) -> dict[str, Any]:
         "verdict": None,
         "defect_type": None,
         "confidence": None,
+        "abstain_reason": None,
         "approval_required": False,
         "validation_attempts": 0,
         "validation_errors_first": [],
         "would_fail": [],
         "observations_text": "",
+        "pre_validation_snapshot": {},
         "report": {},
         "latency_s": 0.0,
         "tokens": 0,
@@ -323,6 +362,7 @@ def _empty_row(sample: dict[str, Any], condition: str) -> dict[str, Any]:
 
 async def _run(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any]]:
     _guard_backends(dry_run=args.dry_run)
+    _guard_run_request(args)
     items = {
         value.strip() for value in (args.items or "").split(",") if value.strip()
     } or None
@@ -381,6 +421,9 @@ async def _run(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any]]:
                         "confidence": result.get(
                             "confidence", report.get("confidence")
                         ),
+                        "abstain_reason": result.get(
+                            "abstain_reason", report.get("abstain_reason")
+                        ),
                         "approval_required": approval_required,
                         "validation_attempts": int(
                             result.get("validation_attempts", 0)
@@ -388,6 +431,9 @@ async def _run(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any]]:
                         "validation_errors_first": first_errors,
                         "would_fail": would_fail,
                         "observations_text": _observations_text(result, report),
+                        "pre_validation_snapshot": result.get(
+                            "pre_validation_snapshot", {}
+                        ),
                         "report": report,
                         "tokens": int(result.get("tokens", 0)),
                         "usd": float(result.get("cost_usd", 0.0)),
@@ -420,11 +466,14 @@ async def _run(args: argparse.Namespace) -> tuple[Path, Path, dict[str, Any]]:
         "dry_run": bool(args.dry_run),
         "requested_samples": len(samples),
         "processed_samples": len(rows),
+        "missing_samples": len(samples) - len(rows),
+        "complete_capture": len(rows) == len(samples),
         "error_count": sum(bool(row.get("error")) for row in rows),
         "cumulative_usd": cumulative_usd,
         "budget_usd": budget,
         "budget_exceeded": budget_exceeded,
-        "binary_metrics": binary_metrics(rows),
+        # 비용 가드로 중단된 표본도 사전 등록 분모에서 빼지 않는다.
+        "binary_metrics": binary_metrics(rows, samples),
         "cost_latency": cost_latency(rows),
         "result_path": str(result_path),
     }
@@ -447,6 +496,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--push-dataset", action="store_true", help="LangSmith Dataset 1회 생성"
+    )
+    parser.add_argument(
+        "--final-run",
+        action="store_true",
+        help="동결된 heldout 최종 실행임을 명시",
+    )
+    parser.add_argument(
+        "--freeze-manifest",
+        help="heldout 실행에 사용할 동결 manifest JSON 경로",
     )
     return parser
 
