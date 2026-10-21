@@ -20,10 +20,22 @@ class AgentState(TypedDict, total=False):
     validation_attempts: int
     validation_feedback: str | None
     validation_passed: bool
+    validation_terminal: bool
     final: str
     last_prompt: str
     cost_usd: float
     tokens: int
+    input_tokens: int | None
+    output_tokens: int | None
+    token_accounting: str | None
+    estimated_usd: float
+    compute_proxy_usd: float
+    observed_model_ids: list[str]
+    successful_provider_requests: int
+    successful_vlm_requests: int
+    unknown_token_usage_successes: int
+    unobserved_model_successes: int
+    observed_model_response_count: int
     events: list[dict]
 
     image_path: str

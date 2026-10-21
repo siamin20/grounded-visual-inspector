@@ -48,10 +48,18 @@ route ─▶ plan ─▶ gate ─▶ research ──▶ analysis ─▶ write �
 
 - **Multi-Agent**: Observer와 Cross-Checker를 병렬 실행한 뒤 Spec-Judge가 결과를 기준서와 대조
 - **MCP**: `inspect_image` Tool / `spec://{item}`, `guide://{defect}` Resource / `inspection_prompt` Prompt
-- **RAG**: 검사 기준서 조항 단위 임베딩 검색 — 판정 기준은 문서가 결정
+- **RAG**: 검사 기준서 조항을 검색하고 코드 규칙이 시각 결과와 함께 종합 판정
 - **Validate**: 보고서의 모든 관찰·조항 인용을 원문과 대조, 불일치 시 반려
 - **HITL**: 폐기·라인 정지 등 위험 조치와 확신 낮은 판정은 사람 승인
-- **LangSmith**: 전 구간 trace + Dataset 평가
+- **LangSmith**: 활성화 시 계층 trace + 명시적 `--push-dataset` 시 Dataset 업로드
+
+평가 지표는 LangSmith의 LLM judge가 아니라 `eval/evaluators.py`의 코드로
+계산한다. Dataset 업로드와 로컬 지표 계산은 서로 다른 선택 기능이다.
+
+`validate`는 보고서가 저장된 VLM 관찰 기록과 기준서를 올바르게 인용했는지를 검사한다.
+VLM의 첫 관찰 자체가 이미지와 일치하는지를 독립적으로 증명하지는 못하며, 이 한계는
+Cross-Checker 일치와 MVTec 외부 라벨에 대한 최종 판정 성능으로 별도 평가한다. 이 평가도
+개별 관찰 문장이나 지목한 픽셀 위치의 진실성까지 직접 증명하지는 않는다.
 
 ## 저장소 구조
 
@@ -70,9 +78,9 @@ web_demo_server.py     Vue 화면 프록시(:8600)
 
 ## Evaluation
 
-[MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) (CVPR 2019, CC BY-NC-SA 4.0) 4품목 held-out 140장. VLM 단독(Before) vs 에이전트(After) vs ablation.
+[MVTec AD](https://www.mvtec.com/company/research/datasets/mvtec-ad) (CVPR 2019, CC BY-NC-SA 4.0) 4품목을 사용한다. held-out 140장은 B0 VLM 단독, B1 기준서 전문 삽입, A 전체 에이전트를 비교하고, ablation은 dev 52장에서만 탐색한다.
 
-실제 평가는 fake 백엔드를 거부하며 실모델 비용이 발생한다. 각 스크립트는 대상 장수와 예산을 보여 준 뒤 승인받고 실행한다.
+실제 평가는 fake 백엔드를 거부하며 실모델 비용이 발생한다. 각 스크립트는 대상 장수와 전체 suite의 공유 예산을 보여 준 뒤 승인받고 실행한다. 결과는 고유 `run_id` 디렉터리에 저장하며, manifest가 코드·데이터·기준서·모델·설정·결과 해시를 묶는다. 기존 실행은 덮어쓰지 않는다.
 
 ```bash
 export LLM_BACKEND=openai VLM_BACKEND=openai EMBED_BACKEND=openai
@@ -93,7 +101,21 @@ bash sh/run_eval_heldout.sh   # held-out: B0, B1, A 후 summary_heldout.md
 | Defect-type Macro-F1 | TBD | TBD | TBD |
 | 인용 충실도 | TBD | TBD | TBD |
 | 지연 p50 / p95 (초) | TBD / TBD | TBD / TBD | TBD / TBD |
-| 평균 비용 (USD/장) | TBD | TBD | TBD |
+| 평균 추정 비용 (estimated USD/장) | TBD | TBD | TBD |
+| 평균 계산 자원 proxy (Ollama 경로) | TBD | TBD | TBD |
+
+추정 비용은 모델 응답의 토큰 수와 실행 manifest에 기록한 가격표로 계산한 값이며
+실제 청구액과 다를 수 있다. Ollama는 API 과금 0과 계산 자원 사용량 proxy를 분리한다.
+재시도·재계획·보고서 재작성이 없는 nominal 경로의 provider 요청은
+B0·B1이 장당 1회, A가 장당 10회이며 A 조건 시작 때 기준서 색인 setup
+요청 1회가 추가된다. 실측 표에서는 추정 총 호출 수가 아니라 실제 성공한
+provider/VLM 응답 수와 retry를 분리해 보고한다.
+예산 가드는 setup과 각 샘플이 끝난 뒤 응답 usage를 더해 검사하는 soft guard다.
+따라서 setup 응답 1회 또는 한 샘플 안의 다중 요청 추정 비용만큼 공유 상한을
+넘을 수 있으며, 절대적인 결제 차단으로 표현하지 않는다.
+배치 평가는 `auto_approve`로 실행하므로 HITL 비율은 승인 필요 사례의 발생률일 뿐,
+사람의 판단이 정확도를 개선했다는 근거로 해석하지 않는다. 실제 승인·반려·재승인은
+interactive 시연으로 확인한다.
 
 H1은 정상/결함 층화 paired permutation의 ΔBalanced Accuracy, H2는
 품목/진실 유형 층화 paired permutation의 ΔMacro-F1로 검정하며 각각 paired
@@ -106,7 +128,11 @@ bootstrap 95% CI를 함께 기록한다: **TBD**. 전체 이진 정오 McNemar�
 
 ## Status
 
-Phase 1–6과 보정 R0–R4 구현 및 fake 백엔드 회귀 검증을 완료했다. held-out은 동결 게이트 전까지 잠겨 있으며, 표의 성능 수치는 실모델 최종 평가 후 채운다.
+Phase 1–6과 보정 R0–R5 구현 및 fake 백엔드 회귀 검증을 완료했다. R6에서
+dev 52장의 B0/A 비교, RAG top-3 실모델 비교, dev 20장×3회 일관성,
+정상·결함·불확실 사례의 interactive 시연을 남겨 두었다. held-out 최종
+평가는 동결 게이트 이후 R8에서만 실행하며, 표의 성능 수치는 실모델
+결과를 확보한 뒤에만 채운다.
 
 ## Attribution
 

@@ -7,7 +7,7 @@ v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평�
 
 ## 0. 한 문단 요약
 
-범용 비전언어모델(VLM)은 학습 없이 산업 이미지를 읽을 수 있지만 산업 외관검사 벤치마크(MMAD, ICLR 2025)에서 최상위 상용 모델도 평균 정확도 74.9%에 그쳐 현장 요구 수준에 못 미친다. 이 프로젝트는 VLM을 "관찰기"로 격하하고, 판정은 검사 기준서 RAG가, 환각 억제는 독립 교차 검증과 원문 대조 validate가, 위험 조치는 사람 승인(HITL)이 맡는 에이전트 운영 레이어를 Base AI Agent 그래프 위에 구현한다. 공개 벤치마크 MVTec AD의 외부 라벨로 VLM 단독(Before) 대비 에이전트(After)의 정확도·환각률·비용 변화를 같은 이미지에 대한 짝지은 비교로 측정하고, 효과가 없으면 없다고 보고한다.
+범용 비전언어모델(VLM)은 학습 없이 산업 이미지를 읽을 수 있지만 산업 외관검사 벤치마크(MMAD, ICLR 2025)에서 최상위 상용 모델도 평균 정확도 74.9%에 그쳐 현장 요구 수준에 못 미친다. 이 프로젝트는 VLM을 "관찰기"로 격하하고, 기준서 RAG로 근거 조항을 찾은 뒤 코드 규칙이 시각 결과와 함께 종합 판정한다. 환각 억제는 별도 관점 교차검증과 원문 대조 validate가, 위험 조치는 사람 승인(HITL)이 맡는 에이전트 운영 레이어를 Base AI Agent 그래프 위에 구현한다. 공개 벤치마크 MVTec AD의 외부 라벨로 VLM 단독(Before) 대비 에이전트(After)의 정확도·환각률·비용 변화를 같은 이미지에 대한 짝지은 비교로 측정하고, 효과가 없으면 없다고 보고한다.
 
 ---
 
@@ -18,7 +18,7 @@ v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평�
 
 - MMAD(Jiang et al., ICLR 2025): 산업 이미지 8,366장·질문 39,672개에서 GPT-4o 74.9%, GPT-4o-mini 66.3%, 최고 오픈소스 70.8%. 저자들이 "산업 요구에 크게 못 미친다"고 명시.
 - Eyes Wide Shut(Tong et al., CVPR 2024): 기본 시각 패턴에서 GPT-4V가 틀린 답에 지어낸 설명을 붙인다.
-- Vision language models are blind(Rahmanzadehgervi et al., ACCV 2024): 원 겹침·선 교차 같은 초등 과제에서 GPT-4o·Gemini·Claude 평균 약 58%.
+- Vision language models are blind(Rahmanzadehgervi et al., ACCV 2024): 원 겹침·선 교차 같은 초등 과제에서 주요 상용 비전언어모델의 평균 성능이 약 58%.
 
 학습 없는 범용 지각기는 있지만 그 위에서 신뢰할 수 있는 판정을 만드는 운영 레이어는 비어 있다. 이 프로젝트는 그 공백을 겨냥한다.
 
@@ -28,7 +28,7 @@ v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평�
 | 신규 품목 즉시 투입 | ✗ 재학습 | ○ | ○ |
 | 판정 기준이 품목·고객마다 다름 | 재학습 | 프롬프트에 하드코딩 | 기준서 RAG (문서만 교체) |
 | 판정 근거를 사람이 읽을 수 있음 | ✗ | △ 환각 섞임 | 관찰 인용 강제 + validate |
-| 오판 가능성 자각(확신도) | 점수만 | ✗ 과신 | 독립 교차 검증 → 확신 플래그 |
+| 오판 가능성 자각(확신도) | 점수만 | ✗ 과신 | 별도 관점 교차검증 → 확신 플래그 |
 | 폐기·라인 정지 같은 위험 조치 | 사람 별도 | ✗ | HITL 승인 노드 |
 | 판정 과정 추적·감사 | 로그 | ✗ | LangSmith 계층 trace |
 
@@ -43,7 +43,7 @@ v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평�
 | lifespan 싱글턴 `SupervisorDeps` | 유지 + `vector_store`, `vlm` 주입 추가 | 확장 |
 | `LLM_BACKEND` fake/ollama/openai 토글 | 유지. VLM도 같은 토글로 fake/ollama/openai | 확장 |
 | `SUPERVISOR_VERSION` v1/v2 토글 | v1 자리를 "VLM 단독(B0)"로 재구성 → Before 스위치 | 용도 변경 |
-| MCP 멀티 서버 + `find_prompt/find_resource_template` 탐색 | ops 서버 자리를 vision 서버로 교체, docs decoy 유지 | 교체 |
+| MCP 멀티 서버 + `find_prompt/find_resource_template` 탐색 | Base ops 서버 파일은 보존하되 기본 연결에서 제외, vision 추가 + docs decoy 유지 | 교체 |
 | MCP 의도적 flaky + `with_retry` | 유지 (VLM tool 호출도 with_retry로 감쌈) | 유지 |
 | SSE 이벤트 스트리밍 | 유지 + 이벤트 타입 추가 (4.4) | 확장 |
 | route → chat / 무거운 파이프라인 분기 | 유지 (이미지 유무로 분기) | 유지 |
@@ -69,7 +69,7 @@ H1은 주 확증 가설, H2·H3은 보조 가설, H4는 탐색적 보정 진단�
 | H2 | 전체 에이전트 A는 B0보다 결함 유형 분류가 정확하다 | 유형 macro-F1 (MVTec 폴더 라벨 기준) | 진실 유형 층화 paired permutation 양측 p<0.05 이고 Δmacro-F1(A−B0)>0 |
 | H3 | validate 반려·재작성은 동일 A 실행의 보고서 환각을 줄인다 | 동일 20 ID의 validate 직전/최종 보고서 환각 포함률 | 관측 After ≤5%, Before보다 낮음, exact McNemar p<0.05 |
 | H4 | `confidence=low`는 high보다 자동 판정 오답을 농축한다 | low PASS/REJECT 오답률 vs high PASS/REJECT 오답률 | 각 그룹 20건 이상에서 low 오답률이 high보다 엄격히 높고 ≥2× |
-| C1 | 비용: 호출 수 증가로 지연·토큰이 늘어난다 | p50/p95 지연, 토큰, USD | 실측 보고 (트레이드오프) |
+| C1 | 비용: 호출 수 증가로 지연·토큰이 늘어난다 | p50/p95 지연, 토큰, 추정 USD | 실측 보고 (트레이드오프) |
 
 사전 등록은 기준을 먼저 적어두고 결과가 못 미치면 "효과 미입증"으로 그대로 발표한다는 뜻이다. 결과를 본 뒤 기준을 바꾸지 않는다.
 R1 계약상 `ABSTAIN`은 모든 주 성능 지표와 McNemar 정오표에서 오답으로 남기며,
@@ -167,10 +167,10 @@ research는 2단계다. Spec-Judge가 Observer의 관찰 문장을 쿼리로 쓰
   2. `spec_clauses` ID가 기준서에 실제 존재하고 품목이 일치
   3. `defect_type`이 해당 품목의 유형 목록 안에 있음
   4. 스키마 통과
-  - 하나라도 실패 → write 재작성(최대 2회). 상한 뒤에도 유효하지 않으면 잘못된 보고서를 강제 통과시키지 않고 `ABSTAIN/low`, `validation_failure`, `재검사`로 강제 HITL한다.
+  - 하나라도 실패 → write 재작성(최대 2회). 상한 뒤에도 유효하지 않으면 `validation_passed=false`를 유지한 종단 실패로 기록하고, 잘못된 보고서를 강제 통과시키지 않은 채 `ABSTAIN/low`, `validation_failure`, `재검사`로 강제 HITL한다.
 - finalize: 보고서 + LangSmith run id + 이벤트 로그.
 
-### 4.2 MCP 서버 (`mcp_server_vision.py`, Base ops 서버 자리)
+### 4.2 MCP 서버 (`mcp_server_vision.py`, Base ops 파일 보존·기본 연결 대체)
 | capability | 이름 | 내용 |
 |---|---|---|
 | Tool | `inspect_image(path, region, style, flip)` | VLM 호출. region=full/tl/tr/bl/br. 반환: 관찰 문장 리스트 + 모델명 + 토큰 |
@@ -181,7 +181,7 @@ research는 2단계다. Spec-Judge가 Observer의 관찰 문장을 쿼리로 쓰
 Base의 `find_prompt / find_resource_template` 멀티 서버 탐색과 docs decoy 서버는 유지한다. VLM tool 호출은 Base의 `with_retry`로 감싼다.
 
 ### 4.3 LLM/VLM 백엔드 (의존성 주입)
-`LLM_BACKEND=fake | ollama | openai` 유지. VLM도 같은 토글: fake(이미지 경로 해시로 결정론 관찰 반환, 테스트·데모용) / ollama `qwen2.5vl:3b` / openai `gpt-4o-mini`(관찰) + `gpt-4o`(교차 검증). 텍스트 노드(plan/write)는 기존 fast/quality 분리 그대로.
+`LLM_BACKEND=fake | ollama | openai` 유지. VLM도 같은 토글: fake(`/test/<label>/` 폴더 라벨을 우선 읽고 등록 파일은 바이트 SHA-256으로 역조회하는 label-leaking 결정론 백엔드, 테스트·데모용, 실평가는 fake 거부) / ollama `qwen2.5vl:3b` / openai `gpt-4o-mini`(관찰) + `gpt-4o`(교차 검증). 텍스트 노드(plan/write)는 기존 fast/quality 분리 그대로.
 
 ### 4.4 이미지 입력 경로와 UI
 Base `/chat`은 텍스트만 받는다. 다음을 추가한다.
@@ -197,12 +197,12 @@ LangGraph `interrupt()`는 checkpointer와 thread_id가 필요하다. Base에는
 - 한 초안의 승인 결정은 그 초안에만 유효하다. 사람 반려 또는 validate 반려로 `write`가 새 초안을 만들면 approval을 초기화하고 새 interrupt ID로 다시 HITL 승인을 요구한다. reject면 원본 위험 보고서를 강제 완료하지 않고 보수적 재작성 경로로 보낸다.
 - pending interrupt가 있는 외부 `thread_id`로 `/chat`, `/chat/stream`, `/inspect` 새 요청을 보내면 409로 거부해 대기 체크포인트 덮어쓰기를 막는다. 먼저 `/chat/resume`으로 해당 초안을 처리해야 한다.
 - 같은 namespace·`thread_id`의 신규 요청과 resume는 single-flight로 직렬화한다. 이미 실행 중이면 409로 거부하고, SSE는 endpoint가 응답 객체를 만든 시점이 아니라 스트림의 자연 종료·예외·취소까지 예약을 유지한다. 따라서 같은 `approval_id`의 동시 재사용과 두 신규 요청의 checkpoint TOCTOU를 허용하지 않는다.
-- `HITL_MODE=interactive | auto_approve | auto_reject`: 배치 평가는 `auto_approve`로 돌려 HITL 발생률만 기록한다. 데모는 interactive.
+- `HITL_MODE=interactive | auto_approve | auto_reject`: 배치 평가는 `auto_approve`로 돌려 HITL 발생률만 기록한다. 데모는 interactive. `auto_reject`가 첫 초안을 반려한 뒤 생성한 새 초안은 자동 승인하지 않고 실제 사람의 새 승인에서 멈춘다.
 - 서버 재시작 후 재개: SQLite checkpointer에 저장된 같은 namespace·`thread_id`·`approval_id`로 가능하다. L1 테스트에 포함.
 
 ### 4.6 RAG
-- 임베딩: OpenAI `text-embedding-3-small`(실측) 또는 Ollama 로컬 임베딩(무료 경로). 벡터 스토어 인메모리(Chroma). 색인 단위: 기준서 조항 1개 = 1 청크, 메타 `{item, defect_type, clause_id}`. 품목 메타 필터 후 유사도 검색.
-- 규모에 대한 솔직한 전제: 기준서 4개·조항 30~40개 수준에서는 전문을 프롬프트에 넣는 B1이 RAG와 비슷하거나 나을 수 있다. RAG의 가치는 품목이 수십·수백 개로 늘어 전문 삽입이 토큰 한도와 비용을 넘을 때 생긴다. 그래서 B1을 반드시 같이 측정하고, B1이 이기면 그렇게 보고한다.
+- 임베딩: OpenAI `text-embedding-3-small`(실측) 또는 Ollama 로컬 임베딩(무료 경로). 벡터 스토어는 외부 DB 없이 작동하는 인메모리 `SpecIndex`이며, NumPy cosine 유사도로 상위 조항을 검색한다. 색인 단위는 기준서 조항 1개 = 1 청크이고, 메타데이터는 `{item, defect_type, clause_id}`다. 품목을 먼저 필터한 다음 유사도 검색한다.
+- 규모에 대한 솔직한 전제: 현재 기준서 4개·조항 25개 수준에서는 전문을 프롬프트에 넣는 B1이 RAG와 비슷하거나 나을 수 있다. RAG의 가치는 품목이 수십·수백 개로 늘어 전문 삽입이 토큰 한도와 비용을 넘을 때 생긴다. 그래서 B1을 반드시 같이 측정하고, B1이 이기면 그렇게 보고한다.
 
 ### 4.7 모듈화
 ```
@@ -210,7 +210,7 @@ agent/
   graph.py            # 조립만
   nodes/route.py plan.py gate.py analysis.py write.py validate.py hitl.py finalize.py
   subgraphs/observer.py cross_checker.py spec_judge.py
-  rag/index.py retriever.py
+  rag/index.py embedder.py
   vision/backends.py  # fake/ollama/openai VLM
 tests/                # pytest
 eval/                 # run_eval.py, dataset.json, type_map.json, evaluators.py
@@ -252,8 +252,12 @@ docs/adr/             # ADR 4건
 | selective accuracy·F1 | PASS/REJECT 자동 판정분만 계산하되 coverage와 항상 함께 표시 |
 | 유형 macro-F1 | defect_type vs 폴더명 (결함 이미지 한정, type_map 적용) |
 | 환각률 | 아래 독립 측정 |
-| 지연 p50/p95, 토큰, USD | LangSmith run 메타데이터 |
-| 반려·replan 횟수, HITL 발생률 | 이벤트 로그 |
+| 지연 p50/p95, 토큰, 추정 USD | 실행 row를 집계. manifest는 가격표·provenance, LangSmith trace는 보조 근거 |
+| 반려·replan·재시도 횟수, HITL 발생률 | 실행 row·이벤트 로그 |
+
+여기서 `USD`는 실제 청구서가 아니라 모델 응답의 토큰 수와 고정 가격표에 따라 계산한
+`estimated_usd`다. 실제 청구액과 같은 값으로 표시하지 않으며, Ollama는 API 과금 0과
+계산 자원 사용량 proxy를 분리해 보고한다.
 
 `eval/dataset.json`의 해당 split을 평가 대상의 단일 roster와 정답으로 사용한다.
 각 조건 결과를 이 roster에 left join해 누락 행도 오답으로 남기며, 결과의 중복·외부 ID나
@@ -303,11 +307,18 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 ### 5.5 L5 교란·결함 주입 (dev셋, 시간 남을 때)
 - 이미지 교란: 90° 회전, 밝기 ±30% → 판정 변동률.
 - 기준서 조항 삭제: 해당 결함 조항을 빼고 돌리면 "기준 없음, 판정 보류"를 내는가. 지어낸 조항 ID를 인용하면 validate가 잡는가.
-- 관찰 조작 주입: Observer 출력에 가짜 문장을 섞었을 때 write가 그걸 인용하면 validate가 반려하는가.
+- 관찰 조작 주입: Observer 기록 자체에 가짜 문장이 들어가면 write가 그 기록을
+  그대로 인용한 것은 validate만으로 잡을 수 없다. validate는 보고서–관찰 기록–기준서
+  사이의 인용·일관성을 검사하며 픽셀 수준의 관찰 진실성을 독립 검증하지 않는다.
+  Cross-Checker 일치와 MVTec 외부 라벨 실측은 최종 판정 성능을 별도 평가하지만,
+  개별 관찰 문장이나 지목한 픽셀 위치의 진실성까지 직접 증명하지는 않는다.
 - 품목 오인: screw 이미지에 bottle 기준서를 강제하면 gate/validate가 걸러내는가.
 
 ### 5.6 LangSmith와 통계
-- Dataset: held-out 이미지 경로 + 라벨. Evaluator 함수는 전부 코드 채점(LLM-as-judge 없음). 프로젝트 분리: `vision-insp-before`, `vision-insp-after`, `vision-insp-ablation-*`.
+- Dataset 업로드는 명시적 `--push-dataset`에서만 수행한다. 지표는
+  `eval/evaluators.py`의 코드로 채점하며 LLM-as-judge를 쓰지 않는다.
+  trace 프로젝트는 `vision-insp-{run_id}-{condition}`으로 실행·조건을
+  분리한다.
 - H1: 사전 등록 ID 전체를 유지하고 누락·오류·ABSTAIN을 오답으로
   남긴 정상/결함 층화 paired permutation으로 Δbalanced accuracy를
   검정한다. paired stratified bootstrap 10,000회 95% CI를 함께 제시한다.
@@ -327,25 +338,41 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 
 ## 6. 실험 설계와 예산
 
-| 조건 | 구성 | 분리하려는 효과 | 데이터 | 호출/장 |
+| 조건 | 구성 | 분리하려는 효과 | 데이터 | nominal provider 요청/장 |
 |---|---|---|---|---|
 | B0 | VLM 1회 (참조 이미지, 품목명, 해당 품목 결함 유형 목록 제공, dev 튜닝 프롬프트) | 단일 VLM 기준선 | held-out 140 | 1 |
 | B1 | B0와 같은 단일 VLM + 기준서 전문 삽입 | 소규모 기준서의 전문 삽입 대안 | held-out 140 | 1 |
-| A | 전체 에이전트 | B0 대비 전체 시스템 효과 | held-out 140 | 약 8 |
+| A | 전체 에이전트 | B0 대비 전체 시스템 효과 | held-out 140 | 10 |
 | A(pre) | A 실행의 첫 write 불변 snapshot | 같은 실행에서 validate 전 보고서 | held-out A 중 사전 고정 20 | 추가 호출 없음 |
-| A−X | Cross-Checker 제거 + C-skip 정책 | 탐색적 묶음 ablation | dev 52 | 약 7 |
-| A−C | 사분면 crop과 center 재계획 제거(full만) | 탐색적 묶음 ablation | dev 52 | 약 4 |
-| A−V | validate 비활성 독립 실행 | 실행 진단 전용, H3 인과 근거로 사용하지 않음 | dev 52 | 약 8 |
+| A−X | Cross-Checker 제거 + C-skip 정책 | 탐색적 묶음 ablation | dev 52 | 9 |
+| A−C | 사분면 crop과 center 재계획 제거(full만) | 탐색적 묶음 ablation | dev 52 | 6 |
+| A−V | validate 비활성 별도 실행 | 실행 진단 전용, H3 인과 근거로 사용하지 않음 | dev 52 | 10 |
 
-- 주 모델 축: `gpt-4o-mini`(관찰) + `gpt-4o`(교차). 호출 수 합계 약 140×10 + 52×19 ≈ 2,388회. 이미지 1장 호출당 약 0.003~0.01 USD로 잡아 상한 15 USD. 초과 시 ablation을 dev 30장으로 줄이도록 사전에 정해 둔다.
-- 로컬 축 `qwen2.5vl:3b`: dev 52장에서 B0와 A만. 비용은 없지만 시간이 들어 P2.
+- 위 요청 수는 재시도·재계획·보고서 재작성이 없는 정상 경로의
+  사전 추정치다. 이미지 입력의 route는 코드 분기라 provider를
+  호출하지 않는다. A의 10회는 plan 1 + Observer 5 +
+  Cross-Checker 1 + query embedding 1 + judge 1 + write 1이다. A 계열
+  조건은 샘플 외에도 조건 시작 때 기준서
+  색인 setup provider 요청 1회를 실행한다. 실측 결과에서는 성공한
+  provider/VLM 응답 수와 retry를 분리해 보고한다.
+- R6 dev B0+A의 nominal 요청은 `52×(1+10)+setup 1=573`, R8
+  held-out B0+B1+A는 `140×(1+1+10)+setup 1=1,681`회다. dev
+  ablation은 각 조건을 별도 실행하므로 이 두 suite 수에 포함하지 않는다.
+- 추정 비용은 모델 응답 토큰과 manifest의 `provider-effective-v2`
+  가격표로 계산하며 실제 청구액을 보증하지 않는다. 유료 조건은
+  한 suite의 15 USD `estimated_usd` soft 상한을 공유한다.
+- 예산 가드는 setup과 각 샘플 종료 후 usage를 합산한다. 따라서
+  setup 응답 1회 또는 한 샘플의 다중 요청 추정 비용만큼 상한을
+  넘을 수 있으며, 절대적인 결제 차단이 아니다.
+- 로컬 축 `qwen2.5vl:3b`: dev 52장에서 B0와 A만. API 과금은
+  0이지만 계산 자원·시간을 사용하며 `compute_proxy_usd`로 분리해 P2로 보고한다.
 - 반복: 5.4의 일관성 측정만 3회(20장). 주 결과는 1회 실행이며 temperature 0.
 - 고정 조건: 같은 이미지, 같은 참조 이미지, 같은 날 실행. `SUPERVISOR_VERSION=v1`을 B0로 재구성해 Base의 버전 토글을 Before 스위치로 쓴다.
 - B0와 A는 모델 강도·호출 수·crop·교차검증·RAG·규칙 판정·validate가 함께
   달라지므로 “전체 시스템 효과”만 주장한다. B1과 A도 전문 삽입 단일 VLM 대
   전체 에이전트라는 대안 비교이지 RAG 검색만의 인과 효과가 아니다. RAG 고유
   효과를 분리하려면 향후 같은 A 파이프라인의 `A-fullspec` 대조군이 필요하다.
-- A−X/A−C/A−V는 dev의 탐색적 독립 재실행이므로 효과 크기·비용 진단만 하며
+- A−X/A−C/A−V는 dev의 탐색적 별도 재실행이므로 효과 크기·비용 진단만 하며
   확정적 인과 주장을 하지 않는다. H3만 동일 A 실행의 A(pre)/최종 보고서를 쓴다.
 
 ---
@@ -368,7 +395,9 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 ---
 
 ## 8. 한계와 트레이드오프
-1. 지연·비용: 호출 수 1 → 약 8회. 지연·비용 수 배. 실측치로 제시. 완화는 크롭 병렬과 fast/quality 분리.
+1. 지연·비용: nominal provider 요청이 B0 1회에서 A 10회로
+   늘고 A 조건 setup 1회가 별도다. 실측 성공 응답·retry·지연·추정
+   비용을 함께 제시한다. 완화는 크롭 병렬과 fast/quality 분리다.
 2. validate의 false reject: 정당한 표현 변형도 반려 가능. 임계값은 dev셋으로 조정하되 held-out에 반영된 비용을 적는다.
 3. 기준서 작성자 편향: 기준서를 내가 썼다. 라벨 미참조·held-out 분리·git 고정으로 완화하지만 완전히 제거되진 않음. 실무에서는 고객 기준서가 대체.
 4. 교차 검증의 상관 오류: 같은 계열 모델은 같은 곳에서 틀릴 수 있다. 모델 분리와 이미지 반전으로 줄이지만 독립 검증이라 부르기엔 한계가 있다. ollama 축에서는 특히 약하다.
@@ -387,7 +416,10 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 
 ---
 
-## 9. 일정 (Day1 15:00 → Day3 13:00)
+## 9. 등록 당시 초기 일정 (Day1 15:00 → Day3 13:00)
+
+> 아래는 주제 등록 당시의 초기 일정이다. 현재 실행 순서와 완료 게이트는
+> `_tasks/00_MASTER_PROMPT.md`의 보정 Phase R0~R10을 따른다.
 
 | 시점 | 작업 | 산출물 |
 |---|---|---|
@@ -396,7 +428,7 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 | Day1 19–21 | Observer 서브그래프 + fake VLM, route/plan 수정, `/chat` image_path 경로 | 이미지 입력 종단 1회 동작 |
 | Day2 09–12 | Cross-Checker, Spec-Judge(RAG), analysis 합의 규칙 | research 2단계 완성 |
 | Day2 13–15 | write 스키마 + validate + HITL(checkpointer, resume, HITL_MODE) | P0 완료 |
-| Day2 15–17 | B0/B1 구성, `eval/run_eval.py`, 독립 환각 매처, LangSmith Dataset, dev셋 튜닝 | 평가 파이프라인 |
+| Day2 15–17 | B0/B1 구성, `eval/run_eval.py`, 독립 환각 매처, 선택적 LangSmith Dataset 업로드, dev셋 튜닝 | 평가 파이프라인 |
 | Day2 17–21 | held-out B0/B1/A 실측 → ablation(dev) → 일관성 20장×3 → 지표별 paired 검정 | 결과 표 |
 | Day3 09–10 | 동일 A 실행 validate 전·후 블라인드 환각 채점 20쌍(40건), 품목별 분해 | 최종 수치 |
 | Day3 10–12 | 모듈 분리, pytest, ADR 4건, README(보고서 대체), `/inspect` 업로드 UI(시간 되면) | 제출물 |

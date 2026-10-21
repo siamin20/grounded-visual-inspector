@@ -7,12 +7,13 @@ from typing import Any
 from langsmith import traceable
 
 from agent.nodes.common import (
-    _cost,
-    _tokens,
+    _merge_usages,
+    _usage_updates,
     is_readable_observation,
     load_type_map,
 )
 from agent.state import AgentState
+from agent.usage import MISSING, nonnegative_int
 
 
 def _mark_tasks_done(tasks: list[dict], indices: set[int]) -> list[dict]:
@@ -123,8 +124,8 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         if str(observation.get("text", "")).strip()
     )
 
-    usage: dict = {"tokens": 0, "usd": 0.0}
-    embedding_usage: dict = {"tokens": 0, "usd": 0.0}
+    usage: dict | None = None
+    embedding_usage: dict | None = None
     if observations_text:
         spec_hits = list(deps.vector_store.search(
             observations_text,
@@ -177,24 +178,42 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         + int(observer_result.get("retries", 0))
         + int(cross_result.get("retries", 0))
     )
-    vlm_usd = (
-        float(observer_result.get("usd", 0.0))
-        + float(cross_result.get("usd", 0.0))
+    observer_usage = observer_result.get("usage")
+    cross_usage = cross_result.get("usage")
+    # 기존 합성 테스트 fixture는 branch usage 객체 대신 합계만 줄 수 있다.
+    # 0건 branch를 total_only로 오인하지 않고, 실제 값이 있을 때만 호환한다.
+    if not isinstance(observer_usage, dict) and (
+        observer_result.get("tokens", 0) or observer_result.get("usd", 0.0)
+    ):
+        observer_usage = {
+            "tokens": observer_result.get("tokens", 0),
+            "usd": observer_result.get("usd", 0.0),
+        }
+    if not isinstance(cross_usage, dict) and (
+        cross_result.get("tokens", 0) or cross_result.get("usd", 0.0)
+    ):
+        cross_usage = {
+            "tokens": cross_result.get("tokens", 0),
+            "usd": cross_result.get("usd", 0.0),
+        }
+    total_usage = _merge_usages(
+        usage,
+        embedding_usage,
+        observer_usage if isinstance(observer_usage, dict) else None,
+        cross_usage if isinstance(cross_usage, dict) else None,
     )
-    vlm_tokens = (
-        int(observer_result.get("tokens", 0))
-        + int(cross_result.get("tokens", 0))
-    )
-    total_usage = dict(usage or {})
-    total_usage["tokens"] = (
-        int(total_usage.get("tokens", 0))
-        + int(embedding_usage.get("tokens", 0))
-        + vlm_tokens
-    )
-    total_usage["usd"] = (
-        float(total_usage.get("usd", 0.0))
-        + float(embedding_usage.get("usd", 0.0))
-        + vlm_usd
+    successful_vlm_requests = nonnegative_int(
+        state.get("successful_vlm_requests", MISSING),
+        name="state.successful_vlm_requests",
+        default=0,
+    ) + nonnegative_int(
+        observer_result.get("successful_provider_requests", MISSING),
+        name="observer.successful_provider_requests",
+        default=0,
+    ) + nonnegative_int(
+        cross_result.get("successful_provider_requests", MISSING),
+        name="cross.successful_provider_requests",
+        default=0,
     )
 
     clause_ids = [
@@ -225,7 +244,7 @@ async def spec_judge_node(state: AgentState, deps: Any) -> dict:
         "tasks": tasks,
         "retry_count": retry_count,
         "parallel_elapsed": parallel_elapsed,
-        "cost_usd": _cost(state, total_usage),
-        "tokens": _tokens(state, total_usage),
+        **_usage_updates(state, total_usage),
+        "successful_vlm_requests": successful_vlm_requests,
         "events": events,
     }

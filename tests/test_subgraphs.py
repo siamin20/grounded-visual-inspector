@@ -345,6 +345,8 @@ async def test_research_runs_observer_and_cross_before_spec_judge(
     assert result["judgement_status"] == "grounded"
     assert all(task["status"] == "done" for task in result["tasks"])
     assert result["retry_count"] == 3
+    assert result["successful_vlm_requests"] == 0
+    assert result["observed_model_ids"] == ["fake-observer", "fake-cross"]
     assert result["parallel_elapsed"] >= 0.25
     assert result["cost_usd"] == pytest.approx(0.526)
 

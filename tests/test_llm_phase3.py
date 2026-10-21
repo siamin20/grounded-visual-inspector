@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from agent import ollama_llm as ollama_backend
+from agent import openai_llm as openai_backend
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.ollama_llm import (
     OllamaFastLLM,
@@ -42,6 +44,17 @@ CLAUSES = [
 ]
 
 
+class _HTTPResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
 def test_fake_inspection_plan_and_judge_are_deterministic():
     llm = FastLLM("fake-fast", 0.0)
 
@@ -50,6 +63,13 @@ def test_fake_inspection_plan_and_judge_are_deterministic():
         "observe", "cross_check", "spec_judge",
     ]
     assert usage["model"] == "fake-fast"
+    assert usage["input_tokens"] + usage["output_tokens"] == usage["tokens"]
+    assert usage["token_accounting"] == "estimated_split"
+    assert usage["estimated_usd"] == 0.0
+    assert usage["compute_proxy_usd"] == 0.0
+    assert usage["requested_model"] == "fake-fast"
+    assert usage["observed_model"] == "fake-fast"
+    assert usage["successful_provider_requests"] == 0
 
     result, _ = llm.judge("목 부위에 선형 긁힘이 보입니다.", CLAUSES, "screw")
     assert result["violations"] == ["SCREW-04"]
@@ -60,6 +80,165 @@ def test_fake_inspection_plan_and_judge_are_deterministic():
     )
     assert normal["violations"] == []
     assert normal["defect_type"] is None
+
+
+def test_openai_usage_keeps_provider_split_and_observed_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = OpenAIFastLLM("requested", 0.1)
+    payload = {
+        "model": "resolved-2026-10-21",
+        "choices": [{"message": {"content": "{}"}}],
+        "usage": {
+            "prompt_tokens": 7,
+            "completion_tokens": 3,
+            "total_tokens": 10,
+        },
+    }
+    monkeypatch.setattr(
+        openai_backend.httpx,
+        "post",
+        lambda *args, **kwargs: _HTTPResponse(payload),
+    )
+
+    _, usage = llm._chat("system", "user")
+
+    assert usage == {
+        "model": "openai:requested",
+        "tokens": 10,
+        "usd": 0.001,
+        "input_tokens": 7,
+        "output_tokens": 3,
+        "token_accounting": "provider_split",
+        "estimated_usd": 0.001,
+        "compute_proxy_usd": 0.0,
+        "requested_model": "openai:requested",
+        "observed_model": "openai:resolved-2026-10-21",
+        "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 1,
+            "unobserved_model_successes": 0,
+    }
+
+
+def test_openai_usage_does_not_invent_missing_observed_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+    llm = OpenAIFastLLM("requested", 0.1)
+    monkeypatch.setattr(
+        openai_backend.httpx,
+        "post",
+        lambda *args, **kwargs: _HTTPResponse({
+            "choices": [{"message": {"content": "{}"}}],
+            "usage": {"total_tokens": 5},
+        }),
+    )
+
+    _, usage = llm._chat("system", "user")
+
+    assert usage["observed_model"] is None
+    assert usage["input_tokens"] is None
+    assert usage["output_tokens"] is None
+    assert usage["token_accounting"] == "total_only"
+    assert usage["tokens"] == 5
+    assert usage["successful_provider_requests"] == 1
+
+
+def test_ollama_usage_separates_compute_proxy_from_estimated_cost(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = OllamaFastLLM("requested", 0.2)
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "post",
+        lambda *args, **kwargs: _HTTPResponse({
+            "model": "resolved:latest",
+            "message": {"content": "{}"},
+            "prompt_eval_count": 4,
+            "eval_count": 6,
+        }),
+    )
+
+    _, usage = llm._chat("system", "user")
+
+    assert usage == {
+        "model": "ollama:requested",
+        "tokens": 10,
+        "usd": 0.002,
+        "input_tokens": 4,
+        "output_tokens": 6,
+        "token_accounting": "provider_split",
+        "estimated_usd": 0.0,
+        "compute_proxy_usd": 0.002,
+        "requested_model": "ollama:requested",
+        "observed_model": "ollama:resolved:latest",
+        "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 1,
+            "unobserved_model_successes": 0,
+    }
+
+
+@pytest.mark.asyncio
+async def test_ollama_stream_usage_uses_final_counts_and_response_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = [
+        json.dumps({
+            "model": "resolved:latest",
+            "message": {"content": "안"},
+            "done": False,
+        }),
+        json.dumps({
+            "model": "resolved:latest",
+            "message": {"content": "녕"},
+            "done": True,
+            "prompt_eval_count": 5,
+            "eval_count": 2,
+        }),
+    ]
+
+    class StreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+    class AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, *_args, **_kwargs):
+            return StreamResponse()
+
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "AsyncClient",
+        lambda **_kwargs: AsyncClient(),
+    )
+    llm = OllamaFastLLM("requested", 0.2)
+
+    content, usage = await llm._chat_stream("system", "user")
+
+    assert content == "안녕"
+    assert usage["input_tokens"] == 5
+    assert usage["output_tokens"] == 2
+    assert usage["tokens"] == 7
+    assert usage["observed_model"] == "ollama:resolved:latest"
+    assert usage["successful_provider_requests"] == 1
 
 
 def test_fake_judge_does_not_confuse_color_with_scratch_common_words():

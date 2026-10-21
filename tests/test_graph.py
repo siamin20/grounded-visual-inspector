@@ -7,11 +7,22 @@ import uuid
 
 from fastapi.testclient import TestClient
 
+from agent.graph import _after_hitl
 from server import app
 
 
 def _event_types(events: list[dict]) -> list[str]:
     return [event["type"] for event in events]
+
+
+def test_terminal_validation_failure_cannot_be_rewritten_after_human_reject() -> None:
+    state = {
+        "validation_terminal": True,
+        "validation_passed": False,
+        "approval": {"required": True, "decision": "reject"},
+    }
+
+    assert _after_hitl(state) == "finalize"
 
 
 def test_fake_post_chat_returns_grounded_report(
@@ -51,7 +62,8 @@ def test_fake_post_chat_returns_grounded_report(
         "confidence": "high",
         "approval_required": False,
         "hitl_mode": "interactive",
-        "vlm_calls": 6,
+        "successful_provider_requests": 0,
+        "successful_vlm_requests": 0,
         "ablation": "",
     }
     assert {

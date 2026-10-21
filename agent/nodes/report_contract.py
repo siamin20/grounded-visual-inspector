@@ -3,6 +3,9 @@
 from copy import deepcopy
 import hashlib
 import json
+from typing import Any, Mapping
+
+from agent.usage import MISSING, nonnegative_finite_float, nonnegative_int
 
 
 def state_lot(state: dict) -> dict:
@@ -14,8 +17,7 @@ def state_lot(state: dict) -> dict:
 def make_pre_validation_snapshot(
     report: dict,
     *,
-    cost_usd: float,
-    tokens: int,
+    usage: Mapping[str, Any],
 ) -> dict:
     """validate 직전 첫 보고서를 재작성과 분리해 고정한다."""
 
@@ -27,13 +29,77 @@ def make_pre_validation_snapshot(
         separators=(",", ":"),
         allow_nan=False,
     ).encode("utf-8")
+    tokens = nonnegative_int(usage.get("tokens", MISSING), name="snapshot.tokens")
+    accounting = usage.get("token_accounting")
+    if accounting not in {
+        "provider_split", "estimated_split", "mixed_split", "total_only"
+    }:
+        raise ValueError("snapshot.token_accounting 값이 올바르지 않습니다.")
+    raw_input = usage.get("input_tokens")
+    raw_output = usage.get("output_tokens")
+    if accounting == "total_only":
+        if raw_input is not None or raw_output is not None:
+            raise ValueError("snapshot total_only usage에 분리 토큰을 둘 수 없습니다.")
+        input_tokens = output_tokens = None
+    else:
+        input_tokens = nonnegative_int(raw_input, name="snapshot.input_tokens")
+        output_tokens = nonnegative_int(raw_output, name="snapshot.output_tokens")
+        if input_tokens + output_tokens != tokens:
+            raise ValueError("snapshot 입력·출력 토큰 합이 전체와 다릅니다.")
+    observed_ids = usage.get("observed_model_ids")
+    if not isinstance(observed_ids, list) or any(
+        not isinstance(value, str) or not value.strip() or value != value.strip()
+        for value in observed_ids
+    ):
+        raise ValueError("snapshot.observed_model_ids가 올바르지 않습니다.")
+    successful = nonnegative_int(
+        usage.get("successful_provider_requests", MISSING),
+        name="snapshot.successful_provider_requests",
+    )
+    observed_count = nonnegative_int(
+        usage.get("observed_model_response_count", MISSING),
+        name="snapshot.observed_model_response_count",
+    )
+    unobserved = nonnegative_int(
+        usage.get("unobserved_model_successes", MISSING),
+        name="snapshot.unobserved_model_successes",
+    )
+    unknown_tokens = nonnegative_int(
+        usage.get("unknown_token_usage_successes", MISSING),
+        name="snapshot.unknown_token_usage_successes",
+    )
+    if observed_count + unobserved != successful or unknown_tokens > successful:
+        raise ValueError("snapshot provider usage 카운터가 일관되지 않습니다.")
+    if observed_count and not observed_ids:
+        raise ValueError("snapshot의 관측 model ID가 누락됐습니다.")
     return {
-        "version": 1,
+        "version": 2,
         "stage": "before_validate",
         "report": frozen_report,
         "report_sha256": hashlib.sha256(canonical).hexdigest(),
-        "cost_usd": float(cost_usd),
-        "tokens": int(tokens),
+        "cost_usd": nonnegative_finite_float(
+            usage.get("cost_usd", MISSING), name="snapshot.cost_usd"
+        ),
+        "tokens": tokens,
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "token_accounting": accounting,
+        "estimated_usd": nonnegative_finite_float(
+            usage.get("estimated_usd", MISSING), name="snapshot.estimated_usd"
+        ),
+        "compute_proxy_usd": nonnegative_finite_float(
+            usage.get("compute_proxy_usd", MISSING),
+            name="snapshot.compute_proxy_usd",
+        ),
+        "observed_model_ids": list(dict.fromkeys(observed_ids)),
+        "successful_provider_requests": successful,
+        "successful_vlm_requests": nonnegative_int(
+            usage.get("successful_vlm_requests", MISSING),
+            name="snapshot.successful_vlm_requests",
+        ),
+        "unknown_token_usage_successes": unknown_tokens,
+        "unobserved_model_successes": unobserved,
+        "observed_model_response_count": observed_count,
     }
 
 

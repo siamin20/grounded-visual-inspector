@@ -805,28 +805,26 @@ def test_cost_latency_handles_empty_and_malformed_values() -> None:
         "latency_p50_s": 0.0,
         "latency_p95_s": 0.0,
         "mean_tokens": 0.0,
+        "mean_input_tokens": None,
+        "mean_output_tokens": None,
         "mean_usd": 0.0,
+        "mean_compute_proxy_usd": 0.0,
+        "known_estimated_usd_sum": 0,
+        "known_cost_n": 0,
+        "unknown_usage_n": 0,
         "hitl_rate": 0.0,
         "mean_validation_attempts": 0.0,
     }
 
-    result = cost_latency(
-        [
-            {
-                "latency_s": "not-a-number",
-                "tokens": -10,
-                "usd": float("nan"),
-                "approval_required": "false",
-                "validation_attempts": -1,
-            }
-        ]
-    )
-    assert result == {
-        "n": 1,
-        "latency_p50_s": 0.0,
-        "latency_p95_s": 0.0,
-        "mean_tokens": 0.0,
-        "mean_usd": 0.0,
-        "hitl_rate": 0.0,
-        "mean_validation_attempts": 0.0,
-    }
+    with pytest.raises(EvaluationDataError, match="0 이상"):
+        cost_latency(
+            [
+                {
+                    "latency_s": "not-a-number",
+                    "tokens": -10,
+                    "usd": float("nan"),
+                    "approval_required": "false",
+                    "validation_attempts": -1,
+                }
+            ]
+        )

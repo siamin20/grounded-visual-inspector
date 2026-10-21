@@ -27,13 +27,14 @@ from eval.report import (  # noqa: E402
     load_result_rows,
 )
 from eval.evaluators import wilson_interval  # noqa: E402
+from eval.provenance import ProvenanceError, verify_run_manifest  # noqa: E402
 
 
 DEFAULT_SEED = 20261020
 DEFAULT_SAMPLE = 20
 DEFAULT_BLIND_NAME = "human_check_blind.jsonl"
 DEFAULT_MAPPING_NAME = "human_check_mapping.json"
-PROTOCOL_VERSION = 2
+PROTOCOL_VERSION = 3
 STAGES = ("before_validate", "after_validate")
 JUDGMENTS = frozenset(
     {
@@ -44,6 +45,16 @@ JUDGMENTS = frozenset(
         "UNCERTAIN",
     }
 )
+
+
+def _unverified_provenance() -> dict[str, Any]:
+    return {
+        "verified": False,
+        "run_id": None,
+        "immutable_sha256": None,
+        "manifest_sha256": None,
+        "a_result_sha256": None,
+    }
 STAGE_GUESSES = frozenset({"before", "after", "unknown"})
 _HALLUCINATION_JUDGMENTS = frozenset({"HALLUCINATED", "UNCERTAIN"})
 _ROW_KEYS = frozenset({"id", "reference_observations", "claims", "stage_guess"})
@@ -52,6 +63,11 @@ _CLAIM_KEYS = frozenset({"claim_id", "source", "text", "judgment"})
 
 class HumanCheckError(ValueError):
     """블라인드 채점의 완전성·무결성을 위반한 오류."""
+
+
+def _default_human_output_dir(results_path: Path) -> Path:
+    """run 결과 JSONL과 파생 채점 산출물을 다른 디렉터리로 분리한다."""
+    return results_path.parent / f"{results_path.name}-human-check"
 
 
 def _atomic_write(path: Path, text: str, *, mode: int | None = None) -> None:
@@ -163,7 +179,17 @@ def _pre_validation_report(source: Mapping[str, Any], *, sample_id: str) -> Mapp
             "사전 선택된 결과의 pre_validation_snapshot이 없거나 무효입니다"
             f"(재표집하지 않음): {sample_id}"
         )
-    if snapshot.get("version") != 1 or snapshot.get("stage") != "before_validate":
+    expected_keys = {
+        "version", "stage", "report", "report_sha256", "cost_usd", "tokens",
+        "input_tokens", "output_tokens", "token_accounting", "estimated_usd",
+        "compute_proxy_usd", "observed_model_ids",
+        "successful_provider_requests", "successful_vlm_requests",
+        "unknown_token_usage_successes", "unobserved_model_successes",
+        "observed_model_response_count",
+    }
+    if set(snapshot) != expected_keys:
+        raise HumanCheckError(f"pre_validation_snapshot 필드가 잘못되었습니다: {sample_id}")
+    if snapshot.get("version") != 2 or snapshot.get("stage") != "before_validate":
         raise HumanCheckError(f"pre_validation_snapshot 계약이 잘못되었습니다: {sample_id}")
     report = snapshot.get("report")
     digest = snapshot.get("report_sha256")
@@ -171,18 +197,55 @@ def _pre_validation_report(source: Mapping[str, Any], *, sample_id: str) -> Mapp
         raise HumanCheckError(f"pre_validation_snapshot 보고서 또는 hash가 무효입니다: {sample_id}")
     if _report_sha256(report) != digest:
         raise HumanCheckError(f"pre_validation_snapshot 보고서 hash가 일치하지 않습니다: {sample_id}")
-    cost = snapshot.get("cost_usd")
-    tokens = snapshot.get("tokens")
-    if (
-        isinstance(cost, bool)
-        or not isinstance(cost, (int, float))
-        or not math.isfinite(float(cost))
-        or float(cost) < 0
-        or isinstance(tokens, bool)
-        or not isinstance(tokens, int)
-        or tokens < 0
+    def valid_float(value: Any) -> bool:
+        return (
+            not isinstance(value, bool)
+            and isinstance(value, (int, float))
+            and math.isfinite(float(value))
+            and float(value) >= 0
+        )
+
+    def valid_int(value: Any) -> bool:
+        return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+    if not all(
+        valid_float(snapshot.get(key))
+        for key in ("cost_usd", "estimated_usd", "compute_proxy_usd")
+    ) or not all(
+        valid_int(snapshot.get(key))
+        for key in (
+            "tokens", "successful_provider_requests", "successful_vlm_requests",
+            "unknown_token_usage_successes", "unobserved_model_successes",
+            "observed_model_response_count",
+        )
     ):
         raise HumanCheckError(f"pre_validation_snapshot usage가 무효입니다: {sample_id}")
+    accounting = snapshot.get("token_accounting")
+    tokens = snapshot["tokens"]
+    if accounting == "total_only":
+        if snapshot.get("input_tokens") is not None or snapshot.get("output_tokens") is not None:
+            raise HumanCheckError(f"pre_validation_snapshot 토큰 분해가 무효입니다: {sample_id}")
+    elif accounting in {"provider_split", "estimated_split", "mixed_split"}:
+        input_tokens = snapshot.get("input_tokens")
+        output_tokens = snapshot.get("output_tokens")
+        if not valid_int(input_tokens) or not valid_int(output_tokens) or input_tokens + output_tokens != tokens:
+            raise HumanCheckError(f"pre_validation_snapshot 토큰 분해가 무효입니다: {sample_id}")
+    else:
+        raise HumanCheckError(f"pre_validation_snapshot token_accounting이 무효입니다: {sample_id}")
+    models = snapshot.get("observed_model_ids")
+    if not isinstance(models, list) or any(
+        not isinstance(value, str) or not value.strip() or value != value.strip()
+        for value in models
+    ):
+        raise HumanCheckError(f"pre_validation_snapshot model ID가 무효입니다: {sample_id}")
+    successful = snapshot["successful_provider_requests"]
+    observed = snapshot["observed_model_response_count"]
+    unobserved = snapshot["unobserved_model_successes"]
+    unknown = snapshot["unknown_token_usage_successes"]
+    if observed + unobserved != successful or unknown > successful:
+        raise HumanCheckError(f"pre_validation_snapshot usage 카운터가 무효입니다: {sample_id}")
+    if observed and not models:
+        raise HumanCheckError(f"pre_validation_snapshot model ID가 누락됐습니다: {sample_id}")
     return report
 
 
@@ -320,6 +383,7 @@ def create_blind_set(
     sample: int = DEFAULT_SAMPLE,
     seed: int = DEFAULT_SEED,
     split: str = "heldout",
+    provenance: Mapping[str, Any] | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     """canonical ID를 한 번 뽑아 validate 전·후 보고서 2N개를 섞는다."""
 
@@ -420,8 +484,66 @@ def create_blind_set(
         "stages": list(STAGES),
         "selected_result_ids": selected_ids,
         "entries": entries,
+        "provenance": dict(provenance or _unverified_provenance()),
     }
     return blind_rows, mapping
+
+
+def _verified_a_rows(
+    run_dir: Path,
+    *,
+    dataset_path: str | Path,
+    split: str,
+    repo_root: str | Path,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """manifest가 결속한 완전한 실모델 A 결과만 로드한다."""
+    try:
+        manifest = verify_run_manifest(
+            run_dir,
+            reject_dry_run=True,
+            reject_fake=True,
+            require_complete=True,
+            validate_rows=True,
+            repo_root=repo_root,
+            verify_inputs=True,
+        )
+    except ProvenanceError as exc:
+        raise HumanCheckError(f"실행 provenance 검증 실패: {exc}") from exc
+    if manifest.get("split") != split:
+        raise HumanCheckError("manifest split과 블라인드 채점 split이 다릅니다.")
+    root = Path(repo_root).resolve(strict=True)
+    recorded_dataset = (root / manifest["artifacts"]["dataset"]["path"]).resolve(strict=True)
+    try:
+        supplied_dataset = Path(dataset_path).resolve(strict=True)
+    except OSError as exc:
+        raise HumanCheckError(f"dataset 경로를 확인할 수 없습니다: {dataset_path}") from exc
+    if supplied_dataset != recorded_dataset:
+        raise HumanCheckError("dataset이 manifest에 결속된 파일과 다릅니다.")
+    if "A" not in manifest.get("planned_conditions", []):
+        raise HumanCheckError("manifest에 A 조건이 사전 계획되지 않았습니다.")
+    record = manifest.get("conditions", {}).get("A")
+    if not isinstance(record, Mapping) or record.get("status") != "complete":
+        raise HumanCheckError("manifest에 완전한 A 결과가 없습니다.")
+    result = record.get("result")
+    if not isinstance(result, Mapping) or not isinstance(result.get("path"), str):
+        raise HumanCheckError("manifest의 A 결과 경로가 무효입니다.")
+    result_path = (run_dir / result["path"]).resolve(strict=True)
+    try:
+        result_path.relative_to(run_dir.resolve(strict=True))
+    except ValueError as exc:
+        raise HumanCheckError("A 결과 경로가 run 디렉터리 밖입니다.") from exc
+    try:
+        rows = load_result_rows(result_path)
+    except ResultDataError as exc:
+        raise HumanCheckError(str(exc)) from exc
+    proof = {
+        "verified": True,
+        "run_id": manifest["run_id"],
+        "immutable_sha256": manifest["immutable_sha256"],
+        "manifest_sha256": manifest["manifest_sha256"],
+        "a_result_sha256": result["sha256"],
+    }
+    return rows, proof
 
 
 def write_blind_set(
@@ -434,23 +556,46 @@ def write_blind_set(
     seed: int = DEFAULT_SEED,
     split: str = "heldout",
     force: bool = False,
+    repo_root: str | Path = ROOT,
+    verify_provenance: bool = True,
 ) -> tuple[Path, Path, int]:
     if split == "heldout" and (sample != DEFAULT_SAMPLE or seed != DEFAULT_SEED):
         raise HumanCheckError(
             "heldout 블라인드 프로토콜은 --sample 20, --seed 20261020으로 고정됩니다."
         )
     results_path = Path(results)
-    output_path = Path(output) if output is not None else results_path / DEFAULT_BLIND_NAME
-    secret_path = Path(mapping_path) if mapping_path is not None else results_path / DEFAULT_MAPPING_NAME
+    derived_dir = _default_human_output_dir(results_path)
+    output_path = Path(output) if output is not None else derived_dir / DEFAULT_BLIND_NAME
+    secret_path = Path(mapping_path) if mapping_path is not None else derived_dir / DEFAULT_MAPPING_NAME
     if output_path.resolve() == secret_path.resolve():
         raise HumanCheckError("블라인드 파일과 익명 매핑 파일은 다른 경로여야 합니다.")
+    if verify_provenance:
+        run_root = results_path.resolve()
+        for derived_path in (output_path, secret_path):
+            try:
+                derived_path.resolve().relative_to(run_root)
+            except ValueError:
+                continue
+            raise HumanCheckError(
+                "블라인드·매핑 산출물은 검증된 run 디렉터리 밖에 저장해야 합니다."
+            )
     existing = [path for path in (output_path, secret_path) if path.exists()]
     if existing and not force:
         names = ", ".join(str(path) for path in existing)
         raise HumanCheckError(f"기존 파일을 덮어쓰지 않습니다: {names} (--force로 덮어쓰기)")
 
     try:
-        rows = load_result_rows(results_path)
+        if verify_provenance:
+            rows, provenance = _verified_a_rows(
+                results_path,
+                dataset_path=dataset_path,
+                split=split,
+                repo_root=repo_root,
+            )
+        else:
+            # 합성 fixture용 저수준 통로다. 이 매핑으로는 결론을 낼 수 없다.
+            rows = load_result_rows(results_path)
+            provenance = _unverified_provenance()
         expected_rows = load_expected_rows(dataset_path, split=split)
     except ResultDataError as exc:
         raise HumanCheckError(str(exc)) from exc
@@ -460,6 +605,7 @@ def write_blind_set(
         sample=sample,
         seed=seed,
         split=split,
+        provenance=provenance,
     )
     mapping["blind_file"] = output_path.name
 
@@ -495,6 +641,29 @@ def _validate_mapping(mapping: Mapping[str, Any]) -> tuple[int, dict[str, Mappin
         raise HumanCheckError("블라인드 매핑 protocol이 잘못되었습니다.")
     if mapping.get("sampling") != "proportional_stratified_item_truth":
         raise HumanCheckError("블라인드 매핑 sampling이 잘못되었습니다.")
+    provenance = mapping.get("provenance")
+    proof_keys = {
+        "verified", "run_id", "immutable_sha256", "manifest_sha256",
+        "a_result_sha256",
+    }
+    if not isinstance(provenance, Mapping) or set(provenance) != proof_keys:
+        raise HumanCheckError("블라인드 매핑 provenance가 잘못되었습니다.")
+    verified = provenance.get("verified")
+    if not isinstance(verified, bool):
+        raise HumanCheckError("블라인드 매핑 provenance.verified가 bool이 아닙니다.")
+    if verified:
+        if not isinstance(provenance.get("run_id"), str) or not provenance["run_id"]:
+            raise HumanCheckError("검증된 블라인드 매핑 run_id가 무효입니다.")
+        for key in ("immutable_sha256", "manifest_sha256", "a_result_sha256"):
+            value = provenance.get(key)
+            if (
+                not isinstance(value, str)
+                or len(value) != 64
+                or any(character not in "0123456789abcdef" for character in value)
+            ):
+                raise HumanCheckError(f"검증된 블라인드 매핑 {key}가 무효입니다.")
+    elif any(provenance.get(key) is not None for key in proof_keys - {"verified"}):
+        raise HumanCheckError("미검증 블라인드 매핑에 provenance 값을 지어낼 수 없습니다.")
     split = mapping.get("split")
     if split not in {"dev", "heldout"}:
         raise HumanCheckError("블라인드 매핑 split은 dev 또는 heldout이어야 합니다.")
@@ -745,14 +914,16 @@ def unblind_scores(
         split == "heldout"
         and seed == DEFAULT_SEED
         and sample == DEFAULT_SAMPLE
+        and bool(mapping["provenance"]["verified"])
     )
     descriptive_criteria_met = threshold_met and decrease_observed and significant
     conclusion_scope = (
         "사전 고정 heldout 20쌍의 완전 채점 관측 표본에 한함"
         if conclusion_allowed
         else (
-            "결론 금지: split=heldout, seed=20261020, sample_pairs=20인 "
-            "사전 고정 프로토콜이 아니므로 기술 통계로만 사용"
+            "결론 금지: 검증된 실모델 provenance와 "
+            "split=heldout, seed=20261020, sample_pairs=20 사전 고정 "
+            "프로토콜을 모두 만족하지 않아 기술 통계로만 사용"
         )
     )
 
@@ -848,7 +1019,15 @@ def render_unblind_summary(summary: Mapping[str, Any]) -> str:
     return "\n".join(lines) + "\n"
 
 
-def run_unblind(blind_path: str | Path, mapping_path: str | Path) -> str:
+def run_unblind(
+    blind_path: str | Path,
+    mapping_path: str | Path,
+    *,
+    results: str | Path | None = None,
+    dataset_path: str | Path = DEFAULT_DATASET,
+    split: str = "heldout",
+    repo_root: str | Path = ROOT,
+) -> str:
     blind = _read_blind_rows(Path(blind_path))
     secret_path = Path(mapping_path)
     if not secret_path.is_file():
@@ -859,6 +1038,17 @@ def run_unblind(blind_path: str | Path, mapping_path: str | Path) -> str:
         raise HumanCheckError(f"매핑 JSON 파싱 오류: {secret_path}: {exc.msg}") from exc
     if not isinstance(mapping, dict):
         raise HumanCheckError("매핑 JSON은 개체여야 합니다.")
+    if results is not None:
+        _, current_proof = _verified_a_rows(
+            Path(results),
+            dataset_path=dataset_path,
+            split=split,
+            repo_root=repo_root,
+        )
+        if mapping.get("provenance") != current_proof:
+            raise HumanCheckError(
+                "블라인드 매핑 provenance가 현재 run manifest와 다릅니다."
+            )
     return render_unblind_summary(unblind_scores(blind, mapping))
 
 
@@ -881,11 +1071,18 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    blind_path = args.output or args.results / DEFAULT_BLIND_NAME
-    mapping_path = args.mapping or args.results / DEFAULT_MAPPING_NAME
+    derived_dir = _default_human_output_dir(args.results)
+    blind_path = args.output or derived_dir / DEFAULT_BLIND_NAME
+    mapping_path = args.mapping or derived_dir / DEFAULT_MAPPING_NAME
     try:
         if args.unblind:
-            markdown = run_unblind(blind_path, mapping_path)
+            markdown = run_unblind(
+                blind_path,
+                mapping_path,
+                results=args.results,
+                dataset_path=args.dataset,
+                split=args.split,
+            )
             print(markdown, end="")
         else:
             output, secret, count = write_blind_set(

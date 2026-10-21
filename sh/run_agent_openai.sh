@@ -13,7 +13,7 @@
 # 종료하려면 이 터미널에서 Ctrl+C.
 #
 set -euo pipefail
-# 전체 에이전트는 이미지 1장당 약 8회의 모델 호출을 사용한다.
+# 전체 에이전트의 명목 경로는 이미지 1장당 10회의 provider 호출을 사용한다.
 cd "$(dirname "$0")/.."
 
 # 이 머신은 plain python3/python이 alias로 다른 경로를 가리켜 venv를 무시하는
@@ -46,7 +46,7 @@ echo "모델: fast=$FAST_MODEL / quality=$QUALITY_MODEL"
 echo "백엔드: llm=$LLM_BACKEND / vlm=$VLM_BACKEND / embed=$EMBED_BACKEND / hitl=$HITL_MODE"
 echo
 echo "⚠️  에이전트가 떠 있는 동안 보내는 요청마다 실제 OpenAI API가 호출되어 계정에"
-echo "   비용이 청구됩니다. 이미지 1장당 호출 약 8회이며, 결제 수단·키 소유자를 확인하세요."
+echo "   비용이 청구됩니다. 명목 경로는 이미지 1장당 provider 호출 10회이며, 결제 수단·키 소유자를 확인하세요."
 read -r -p "계속하시겠습니까? [y/N] " CONFIRM
 case "$CONFIRM" in
     [yY]|[yY][eE][sS]) ;;

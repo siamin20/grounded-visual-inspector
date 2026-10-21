@@ -68,7 +68,7 @@ async def test_async_server_good_and_auto_reject_contract(
     tmp_path,
     synthetic_mvtec_paths,
 ) -> None:
-    """정상 POST와 위험 결함 자동 반려가 같은 비동기 앱 수명에서 완료된다."""
+    """자동 반려 뒤 변경 보고서는 같은 앱 수명에서 새 승인을 기다린다."""
     _configure_fake(
         monkeypatch,
         tmp_path / "auto-reject-checkpoints.db",
@@ -119,20 +119,17 @@ async def test_async_server_good_and_auto_reject_contract(
     approvals = [
         payload for payload in payloads if payload["type"] == "ApprovalResolved"
     ]
-    final = payloads[-1]
-
-    assert lines[-1] == "[DONE]"
-    assert "[PAUSED]" not in lines
+    assert lines[-1] == "[PAUSED]"
     assert event_types.count("ApprovalRequired") == 2
-    assert event_types.count("ApprovalResolved") == 2
-    assert [approval["decision"] for approval in approvals] == ["reject", "approve"]
+    assert event_types.count("ApprovalResolved") == 1
+    assert [approval["decision"] for approval in approvals] == ["reject"]
     assert event_types.index("ApprovalResolved") < event_types.index(
         "DraftWritten",
         event_types.index("ApprovalResolved"),
     )
-    assert final["type"] == "FinalAnswer"
-    assert final["report"]["verdict"] == "REJECT"
-    assert final["report"]["defect_type"] == "broken_small"
+    assert payloads[-1]["type"] == "ApprovalRequired"
+    assert payloads[-1]["report"]["verdict"] == "REJECT"
+    assert payloads[-1].get("approval_id")
     assert health.status_code == 200
     assert health.json()["hitl_mode"] == "auto_reject"
 

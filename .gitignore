@@ -16,4 +16,8 @@ data/uploads/*
 data/mvtec/*
 !data/mvtec/.gitkeep
 
+# 평가 산출물은 실행마다 생성되며 경로·해시·비용 정보를 포함할 수 있다.
+eval/results/*
+!eval/results/.gitkeep
+
 .DS_Store

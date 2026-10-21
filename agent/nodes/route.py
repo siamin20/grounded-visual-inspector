@@ -5,7 +5,7 @@ from langsmith import traceable
 from agent.deps import SupervisorDeps
 from agent.state import AgentState
 
-from .common import KNOWN_ITEMS, _cost, _tokens, event
+from .common import KNOWN_ITEMS, _usage_updates, event
 
 
 @traceable(name="route_node")
@@ -23,8 +23,7 @@ async def route_node(state: AgentState, deps: SupervisorDeps) -> dict:
     return {
         "route": "chat",
         "needs_analysis": False,
-        "cost_usd": _cost(state, usage),
-        "tokens": _tokens(state, usage),
+        **_usage_updates(state, usage),
         "events": event(
             state, "RouteDecided", route="chat", classifier_route=result.get("route")
         ),

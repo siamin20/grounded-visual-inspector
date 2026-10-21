@@ -53,7 +53,7 @@ flowchart TB
 | v1 비교 기준 | VLM 한 번으로 B0·B1 조건 실행 | `agent/supervisor_v1.py` |
 | vision MCP | 이미지 검사 도구, 기준서·조치 가이드·프롬프트 제공 | `mcp_server_vision.py` |
 | docs MCP | 여러 MCP 중 올바른 서버를 고르는지 확인하기 위한, 이미지 검사와 관계없는 문서 리소스 | `mcp_server_docs.py` |
-| 검사 기준 검색 | 이미지 검사 결과와 관련된 기준서 조항 검색 | `agent/rag.py`, `data/specs/` |
+| 검사 기준 검색 | 이미지 검사 결과와 관련된 기준서 조항 검색 | `agent/rag/index.py`, `data/specs/` |
 | 상태 저장 | 대화 기록과 승인 대기 시점의 검사 상태를 별도 보존 | `session.db`, `checkpoints.db` |
 | 실행 추적 | 활성화했을 때 노드·모델 호출 계층을 실행 단위로 기록 | LangSmith trace |
 
@@ -98,7 +98,7 @@ flowchart TB
 | 종합 판정 | `analysis` | 세 결과를 코드 규칙으로 조합해 PASS·REJECT·ABSTAIN 결정 |
 | 검사 보고서 작성 | `write` | 근거·확신도·조치 방안을 정해진 JSON 형식으로 작성 |
 | 담당자 승인 | `hitl` | 필요한 경우만 실행을 중단하고 승인·반려 대기 |
-| 근거·형식 검증 | `validate` | 인용 근거, 기준서 조항, 조치 방안, 보고서 형식을 코드로 검증 |
+| 근거·형식 검증 | `validate` | 보고서와 저장된 VLM 관찰 기록·기준서 사이의 인용, 조치 방안, 형식을 코드로 검증. 픽셀 수준 관찰 정확도를 독립 증명하지는 않음 |
 | 최종 결과 확정 | `finalize` | 최종 보고서와 이벤트 완료 |
 
 실행 순서의 핵심은 다음과 같다.
@@ -123,7 +123,9 @@ stateDiagram-v2
     Paused --> Validate: 승인
     Validate --> Done: 검증 통과
     Validate --> Draft: 검증 실패·재작성 가능
-    Validate --> Paused: 재작성 상한·ABSTAIN
+    Validate --> TerminalPaused: 재작성 상한·ABSTAIN
+    TerminalPaused --> FailedDone: 담당자가 재검사 요청 확인
+    FailedDone --> [*]: validation_passed=false
     Done --> [*]
 ```
 
@@ -134,6 +136,7 @@ stateDiagram-v2
 | `/chat/resume` 요청 | namespace·`thread_id`·현재 `approval_id`가 정확히 일치할 때만 재개 |
 | 누락·이전·다른 실행의 `approval_id` | `422` 또는 `409`로 거부 |
 | 반려 또는 검증 실패로 새 초안 생성 | 이전 승인을 재사용하지 않고 필요하면 새 `approval_id`로 다시 승인 |
+| 검증 재작성 상한 도달 | `validation_passed=false` 종단 실패와 `ABSTAIN/validation_failure`를 유지한 채 담당자 확인으로 이동. 확인 후 검증 성공으로 바꾸지 않고 재검사 요청 상태로 종료 |
 | 서버 재시작 | `checkpoints.db`에서 상태를 복원해 같은 ID로 계속 |
 
 상태 저장 namespace는 `v2`, `v1:B0`, `v1:B1`로 나뉜다. 같은 사용자 ID를 써도
@@ -148,7 +151,8 @@ flowchart TB
     Data --> Dev["개발용 데이터<br/>B0 · B1 · A · A-X · A-C · A-V"]
     Main --> Run["서버 없이 조건별 실행"]
     Dev --> Run
-    Run --> Rows["조건별 JSONL 결과"]
+    Run --> Manifest["고유 run_id와 manifest"]
+    Manifest --> Rows["조건별 JSONL 결과"]
     Rows --> Score["전체 평가 ID를 기준으로<br/>성능·비용 집계"]
     Rows --> Blind["같은 A 실행의 검증 전·후<br/>20쌍 사람 블라인드 채점"]
     Blind --> H3["H3 별도 집계"]
@@ -156,7 +160,7 @@ flowchart TB
     H3 --> Result
 ```
 
-평가 목록은 `sh/setup_data.sh`과 `eval/make_dataset.py`가 MVTec AD의 외부 폴더
+평가 목록은 `sh/setup_data.sh`와 `eval/make_dataset.py`가 MVTec AD의 외부 폴더
 라벨을 읽어 만들며, 고정 seed로 개발용 52장과 최종 평가용 140장을 나눈다.
 검사 기준서는 판정 근거이지만 정답 라벨은 아니다.
 
@@ -172,6 +176,16 @@ flowchart TB
 - 최종 평가용 데이터에서는 B0·B1·A만 허용한다. 임의 품목 필터·건수 제한·
   fake 백엔드·dry-run을 거부하고, `--final-run`과 데이터셋 hash가 든 동결
   manifest를 모두 확인한다.
+- 각 실행은 고유 `run_id` 디렉터리만 사용한다. manifest는 코드·데이터·기준서·
+  가이드·모델·설정과 결과 파일의 해시를 묶으며, 기존 결과를 덮어쓰거나 서로 다른
+  실행의 결과를 섞는 것을 허용하지 않는다.
+- 비용은 실제 청구액으로 단정하지 않고 고정 가격표에 따른 `estimated_usd`로 표시한다.
+  유료 평가 조건은 하나의 suite 예산을 공유하며 조건마다 예산을 초기화하지 않는다.
+- 재시도·재계획·재작성이 없는 nominal provider 요청은 B0·B1
+  각 1회/장, A 10회/장이며 A 조건 시작 때 기준서 색인 setup
+  1회가 추가된다. 실측은 성공 provider/VLM 응답과 retry를 분리한다.
+- setup과 한 샘플의 다중 요청 usage는 각 단위가 끝난 뒤 예산에
+  더해지므로 soft 상한을 해당 단위의 추정 비용만큼 넘을 수 있다.
 - 성공한 행만 모아 성능을 계산하지 않는다. `eval/dataset.json`의 전체 ID에
   각 조건 결과를 맞추고, 누락·오류·`ABSTAIN`·무효 판정도 종단 지표의 오답으로
   남긴다.
@@ -183,6 +197,9 @@ flowchart TB
   채점했을 때만 허용한다. 선택된 결과에 누락·오류가 있어도 다른 표본으로
   바꾸지 않고 결론을 중단한다.
 - dev에서는 H1·H2·H4의 수치만 탐색하고 가설을 확정하지 않는다.
+- 배치 A는 `auto_approve`로 실행한다. HITL 비율은 승인 필요 사례의
+  발생률이지 사람 판단이 정확도를 높였다는 근거가 아니다. 실제
+  승인·반려·재승인은 interactive 시연으로 보여 준다.
 
 ## 6. 반드시 유지할 설계 규칙
 
@@ -193,3 +210,4 @@ flowchart TB
 4. 비교 기준 B0·B1과 전체 에이전트 A는 같은 평가 ID를 사용한다.
 5. 누락·오류·판독 불가를 성능 분모에서 제외하지 않는다.
 6. 담당자가 본 보고서와 최종 보고서가 달라지면 기존 승인을 재사용하지 않는다.
+7. 평가 결과는 고유 run manifest와 해시가 일치할 때만 집계한다.

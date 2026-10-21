@@ -43,6 +43,10 @@ def test_fake_embedder_is_deterministic_and_normalised():
     assert np.count_nonzero(first[1]) == 0
     assert embedder.last_usage["tokens"] > 0
     assert embedder.last_usage["usd"] == 0.0
+    assert embedder.last_usage["input_tokens"] == embedder.last_usage["tokens"]
+    assert embedder.last_usage["output_tokens"] == 0
+    assert embedder.last_usage["token_accounting"] == "estimated_split"
+    assert embedder.last_usage["successful_provider_requests"] == 0
 
 
 def test_spec_index_parses_filters_and_searches(tmp_path):
@@ -60,7 +64,11 @@ def test_spec_index_parses_filters_and_searches(tmp_path):
     assert index.clause("BOTTLE-06")["defect_type"] == "contamination"
     assert "SCREW-04" in index.full_text("screw")
     assert index.search("anything", item="unknown") == []
+    assert index.embedder.last_usage["tokens"] == 0
+    assert index.embedder.last_usage["successful_provider_requests"] == 0
     assert index.search("anything", item="screw", k=0) == []
+    assert index.embedder.last_usage["tokens"] == 0
+    assert index.embedder.last_usage["successful_provider_requests"] == 0
 
 
 def test_spec_index_rejects_duplicate_clause_ids(tmp_path):
@@ -101,7 +109,11 @@ def test_ollama_embedder_records_usage(monkeypatch):
 
     def fake_post(url, **kwargs):
         called.update(url=url, **kwargs)
-        return _Response({"embeddings": [[1.0, 0.0], [0.0, 1.0]], "prompt_eval_count": 7})
+        return _Response({
+            "embeddings": [[1.0, 0.0], [0.0, 1.0]],
+            "prompt_eval_count": 7,
+            "model": "embed-test-resolved",
+        })
 
     monkeypatch.setattr("agent.rag.embedder.httpx.post", fake_post)
     embedder = OllamaEmbedder(model="embed-test", base_url="http://ollama.local")
@@ -110,7 +122,22 @@ def test_ollama_embedder_records_usage(monkeypatch):
     assert called["url"] == "http://ollama.local/api/embed"
     assert called["json"] == {"model": "embed-test", "input": ["a", "b"]}
     assert matrix.shape == (2, 2)
-    assert embedder.last_usage == {"model": "ollama:embed-test", "tokens": 7, "usd": 0.0}
+    assert embedder.last_usage == {
+        "model": "ollama:embed-test",
+        "tokens": 7,
+        "usd": 0.0,
+        "input_tokens": 7,
+        "output_tokens": 0,
+        "token_accounting": "provider_split",
+        "estimated_usd": 0.0,
+        "compute_proxy_usd": 0.0,
+        "requested_model": "ollama:embed-test",
+        "observed_model": "ollama:embed-test-resolved",
+        "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 1,
+            "unobserved_model_successes": 0,
+    }
 
 
 def test_openai_embedder_orders_rows_and_records_usage(monkeypatch):
@@ -123,7 +150,8 @@ def test_openai_embedder_orders_rows_and_records_usage(monkeypatch):
                 {"index": 1, "embedding": [0.0, 1.0]},
                 {"index": 0, "embedding": [1.0, 0.0]},
             ],
-            "usage": {"total_tokens": 50},
+            "usage": {"prompt_tokens": 50, "total_tokens": 50},
+            "model": "embed-test-2026",
         })
 
     monkeypatch.setenv("OPENAI_API_KEY", "test-key")
@@ -137,4 +165,97 @@ def test_openai_embedder_orders_rows_and_records_usage(monkeypatch):
         "model": "openai:embed-test",
         "tokens": 50,
         "usd": 1e-06,
+        "input_tokens": 50,
+        "output_tokens": 0,
+        "token_accounting": "provider_split",
+        "estimated_usd": 1e-06,
+        "compute_proxy_usd": 0.0,
+        "requested_model": "openai:embed-test",
+        "observed_model": "openai:embed-test-2026",
+        "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 1,
+            "unobserved_model_successes": 0,
     }
+
+
+@pytest.mark.parametrize("backend", ["ollama", "openai"])
+def test_embedder_preserves_provider_usage_before_vector_shape_validation(
+    backend: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    if backend == "ollama":
+        payload = {
+            "embeddings": [[1.0, 0.0]],
+            "prompt_eval_count": 7,
+            "model": "resolved-embed",
+        }
+        embedder = OllamaEmbedder(
+            model="embed-test", base_url="http://ollama.local"
+        )
+    else:
+        payload = {
+            "data": [{"index": 0, "embedding": [1.0, 0.0]}],
+            "usage": {"prompt_tokens": 7},
+            "model": "resolved-embed",
+        }
+        monkeypatch.setenv("OPENAI_API_KEY", "test-key")
+        embedder = OpenAIEmbedder(
+            model="embed-test", url="https://openai.test/v1/embeddings"
+        )
+    monkeypatch.setattr(
+        "agent.rag.embedder.httpx.post",
+        lambda *args, **kwargs: _Response(payload),
+    )
+
+    with pytest.raises(RuntimeError):
+        embedder.embed(["first", "second"])
+
+    assert embedder.last_usage["successful_provider_requests"] == 1
+    assert embedder.last_usage["tokens"] == 7
+    assert embedder.last_usage["observed_model"] in {
+        "ollama:resolved-embed", "openai:resolved-embed"
+    }
+
+
+def test_ollama_embedder_does_not_invent_observed_model(monkeypatch):
+    monkeypatch.setattr(
+        "agent.rag.embedder.httpx.post",
+        lambda *args, **kwargs: _Response({
+            "embeddings": [[1.0, 0.0]],
+            "prompt_eval_count": 3,
+        }),
+    )
+    embedder = OllamaEmbedder(model="requested", base_url="http://ollama.local")
+
+    embedder.embed(["a"])
+
+    assert embedder.last_usage["requested_model"] == "ollama:requested"
+    assert embedder.last_usage["observed_model"] is None
+    assert embedder.last_usage["successful_provider_requests"] == 1
+
+
+@pytest.mark.parametrize("bad_count", [-1, True, "7"])
+def test_ollama_embedder_rejects_invalid_usage_counts(monkeypatch, bad_count):
+    monkeypatch.setattr(
+        "agent.rag.embedder.httpx.post",
+        lambda *args, **kwargs: _Response({
+            "embeddings": [[1.0, 0.0]],
+            "prompt_eval_count": bad_count,
+        }),
+    )
+    embedder = OllamaEmbedder(model="embed-test", base_url="http://ollama.local")
+
+    with pytest.raises(ValueError, match="prompt_eval_count"):
+        embedder.embed(["a"])
+
+
+def test_real_embedder_empty_input_records_no_provider_request(monkeypatch):
+    embedder = OpenAIEmbedder(model="embed-test")
+
+    matrix = embedder.embed([])
+
+    assert matrix.shape == (0, 0)
+    assert embedder.last_usage["requested_model"] == "openai:embed-test"
+    assert embedder.last_usage["observed_model"] is None
+    assert embedder.last_usage["successful_provider_requests"] == 0

@@ -11,8 +11,8 @@ OpenAI 계정에 실제 비용이 청구된다(run_openai.sh 실행 전 반드�
 기능은 아니라서, 시스템 프롬프트에 원하는 필드를 명시하고 ollama_llm.py와 동일하게
 코드 레벨 방어(파싱 실패·필드 누락 시 보정)를 그대로 둔다.
 
-비용(cost_usd)은 OpenAI 응답의 `usage.total_tokens`(실측) × 가상 단가다 — 실제 청구
-금액과는 별개로, W10a의 모델 분리 효과를 fake/ollama와 같은 잣대로 비교하기 위함이다.
+비용은 OpenAI 응답의 실측 토큰 수 × 고정 단가를 ``estimated_usd``로
+기록한다. 실제 청구 금액을 뜻하지 않으며 ``usd``는 기존 호환용 값이다.
 (OpenAI는 입력/출력 토큰 단가가 실제로는 다르지만, 세 백엔드의 인터페이스를
 `usd_per_1k_tokens` 하나로 통일해두기 위해 여기서도 단일 블렌디드 단가로 단순화한다.)
 
@@ -27,6 +27,16 @@ import httpx
 from langsmith import traceable
 
 OPENAI_URL = "https://api.openai.com/v1/chat/completions"
+
+
+def _usage_count(usage: dict, key: str) -> int | None:
+    """OpenAI usage의 누락과 잘못된 값을 구분한다."""
+    if key not in usage:
+        return None
+    value = usage[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(f"OpenAI usage.{key}이 0 이상 정수가 아닙니다.")
+    return value
 
 
 def _load_known_systems() -> set[str]:
@@ -156,9 +166,39 @@ class OpenAILLM:
         resp.raise_for_status()
         data = resp.json()
         content = data["choices"][0]["message"]["content"]
-        tokens = data.get("usage", {}).get("total_tokens", 0)
-        usage = {"model": self.name, "tokens": tokens,
-                 "usd": round(tokens / 1000 * self.usd_per_1k, 6)}
+        raw_usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        input_tokens = _usage_count(raw_usage, "prompt_tokens")
+        output_tokens = _usage_count(raw_usage, "completion_tokens")
+        total_tokens = _usage_count(raw_usage, "total_tokens")
+        has_split = input_tokens is not None and output_tokens is not None
+        token_usage_known = has_split or total_tokens is not None
+        if has_split:
+            total_tokens = input_tokens + output_tokens
+        elif total_tokens is None:
+            total_tokens = 0
+        observed_model = data.get("model")
+        observed_model = (
+            f"openai:{observed_model.strip()}"
+            if isinstance(observed_model, str) and observed_model.strip()
+            else None
+        )
+        estimated_usd = round(total_tokens / 1000 * self.usd_per_1k, 6)
+        usage = {
+            "model": self.name,
+            "tokens": total_tokens,
+            "usd": estimated_usd,
+            "input_tokens": input_tokens if has_split else None,
+            "output_tokens": output_tokens if has_split else None,
+            "token_accounting": "provider_split" if has_split else "total_only",
+            "estimated_usd": estimated_usd,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": observed_model,
+            "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0 if token_usage_known else 1,
+            "observed_model_response_count": 1 if observed_model else 0,
+            "unobserved_model_successes": 0 if observed_model else 1,
+        }
         return content, usage
 
 

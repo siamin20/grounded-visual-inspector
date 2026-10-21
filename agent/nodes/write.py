@@ -10,7 +10,7 @@ from agent.deps import SupervisorDeps
 from agent.guide_actions import parse_guide_actions, resolve_reject_actions
 from agent.state import AgentState
 
-from .common import _cost, _tokens, event
+from .common import _usage_updates, event
 from .report_contract import (
     deterministic_summary,
     make_pre_validation_snapshot,
@@ -213,8 +213,7 @@ async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
         feedback = "JSON 파싱 실패"
     enforced_draft = json.dumps(report, ensure_ascii=False)
 
-    next_cost = _cost(state, usage)
-    next_tokens = _tokens(state, usage)
+    usage_updates = _usage_updates(state, usage)
     result = {
         "draft": enforced_draft,
         "report": report,
@@ -222,10 +221,10 @@ async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
         "approval": {"required": False, "decision": None, "note": ""},
         "reapproval_required": reapproval_required,
         "validation_attempts": attempt,
+        "validation_terminal": False,
         "validation_feedback": feedback,
         "last_prompt": usage.get("prompt"),
-        "cost_usd": next_cost,
-        "tokens": next_tokens,
+        **usage_updates,
         "events": event(state, "DraftWritten", attempt=attempt),
     }
     # H3은 별도 모델 호출이 아닌 동일 실행의 validate 전·후를 비교한다.
@@ -233,7 +232,6 @@ async def write_node(state: AgentState, deps: SupervisorDeps) -> dict:
     if attempt == 1 and not state.get("pre_validation_snapshot"):
         result["pre_validation_snapshot"] = make_pre_validation_snapshot(
             report,
-            cost_usd=next_cost,
-            tokens=next_tokens,
+            usage=usage_updates,
         )
     return result

@@ -353,11 +353,17 @@ async def test_direct_v1_auto_reject_replaces_original_report_without_vlm_recall
         if value["type"] == "ApprovalResolved"
     ]
     assert mcp.calls == 1
-    assert resolved == ["reject", "approve"]
+    assert resolved == ["reject"]
     assert [
         value["type"] for value in result["events"]
     ].count("ApprovalRequired") == 2
-    assert result["final"]
+    assert result["final"] == ""
+    assert result["paused"] is True
+    assert result["approval"] == {
+        "required": True,
+        "decision": None,
+        "note": "",
+    }
     assert result["verdict"] == "ABSTAIN"
     assert result["report"]["verdict"] == "ABSTAIN"
     assert result["report"]["confidence"] == "low"
@@ -435,7 +441,7 @@ def test_v1_interactive_reject_requires_fresh_abstain_approval(
     assert approved_payloads[-1]["report"]["actions"] == ["재검사"]
 
 
-def test_v1_auto_reject_rewrites_then_auto_approves_fresh_abstain(
+def test_v1_auto_reject_rewrites_then_pauses_for_fresh_approval(
     monkeypatch, tmp_path: Path
 ) -> None:
     """auto_reject도 반려된 REJECT를 강제 완료하지 않는다."""
@@ -472,12 +478,17 @@ def test_v1_auto_reject_rewrites_then_auto_approves_fresh_abstain(
         for value in payloads
         if value["type"] == "ApprovalResolved"
     ]
-    assert lines[-1] == "[DONE]"
+    assert lines[-1] == "[PAUSED]"
     assert event_types.count("ApprovalRequired") == 2
-    assert decisions == ["reject", "approve"]
-    assert payloads[-1]["report"]["verdict"] == "ABSTAIN"
-    assert payloads[-1]["report"]["abstain_reason"] == "validation_failure"
-    assert payloads[-1]["report"]["actions"] == ["재검사"]
+    assert decisions == ["reject"]
+    second_approval = next(
+        value
+        for value in reversed(payloads)
+        if value["type"] == "ApprovalRequired"
+    )
+    assert second_approval["report"]["verdict"] == "ABSTAIN"
+    assert second_approval["report"]["abstain_reason"] == "validation_failure"
+    assert second_approval["report"]["actions"] == ["재검사"]
 
 
 def test_v1_abstain_resumes_after_server_restart(monkeypatch, tmp_path: Path) -> None:

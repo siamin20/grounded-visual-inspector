@@ -220,11 +220,15 @@ async def test_validate_replaces_invalid_report_with_abstain_at_third_attempt(
 
     retry = await validate_node(state, _deps())
     assert retry["validation_passed"] is False
+    assert retry["validation_terminal"] is False
+    assert retry["events"][-1]["passed"] is False
     assert retry["events"][-1]["verdict"] == "rejected"
 
     state["validation_attempts"] = 3
     abstained = await validate_node(state, _deps())
-    assert abstained["validation_passed"] is True
+    assert abstained["validation_passed"] is False
+    assert abstained["validation_terminal"] is True
+    assert abstained["events"][-1]["passed"] is False
     assert abstained["verdict"] == "ABSTAIN"
     assert abstained["defect_type"] is None
     assert abstained["confidence"] == "low"
@@ -400,6 +404,8 @@ async def test_no_validate_keeps_failures_only_in_would_fail(
     result = await validate_node(state, _deps())
 
     assert result["validation_passed"] is True
+    assert result["validation_terminal"] is True
+    assert result["events"][-1]["skipped"] is True
     assert result["validation_errors"] == []
     assert any(
         "존재하지 않는 기준 조항" in error

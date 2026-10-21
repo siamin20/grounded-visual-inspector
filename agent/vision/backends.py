@@ -27,6 +27,7 @@ from PIL import Image
 
 from agent.readability import is_unreadable_text
 from agent.typemap import load_type_map
+from agent.usage import MISSING, nonnegative_finite_float, nonnegative_int
 
 from .crop import REGIONS, crop_region, flip_h, unflip_regions
 
@@ -53,6 +54,11 @@ _FAKE_OBSERVATIONS = {
     "hole": ("껍질 표면에 둘러싼 경계가 분명한 구멍이 보입니다.", ["구멍", "분명한 경계"]),
     "print": ("껍질 표면에 주변 무늬와 다른 인쇄형 흔적이 보입니다.", ["인쇄형 흔적", "표면 무늬 차이"]),
 }
+
+
+def openai_vlm_usd_per_million(model: str) -> float:
+    """실제 OpenAI VLM 후보 모델에 적용할 평가용 블렌디드 단가다."""
+    return 0.15 if model.startswith("gpt-4o-mini") else 2.5
 
 
 def _file_sha256(path: Path) -> str:
@@ -171,11 +177,219 @@ def _language_text(raw: dict[str, Any], style: str) -> str:
     return str(raw.get("text", ""))
 
 
+def _usage_count(data: dict[str, Any], key: str, *, provider: str) -> int | None:
+    """Provider usage의 누락과 잘못된 값을 구분한다."""
+    if key not in data:
+        return None
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(f"{provider} {key}이 0 이상 정수가 아닙니다.")
+    return value
 
 
-def _normalize_result(raw: dict[str, Any], *, style: str, model: str,
+def _observed_model(provider: str, value: Any) -> str | None:
+    """응답에 실제 모델 ID가 있을 때만 backend 접두어를 붙인다."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return f"{provider}:{value.strip()}"
+
+
+def _merge_request_usage(*usages: dict[str, Any]) -> dict[str, Any]:
+    """한 관찰 안의 한국어 재요청까지 실제 사용량으로 합산한다."""
+    if not usages:
+        raise ValueError("합산할 VLM usage가 없습니다.")
+    usages = tuple(
+        _result_usage(
+            model=usage.get("observed_model"),
+            tokens=0,
+            usd=0.0,
+            usage=usage,
+        )
+        for usage in usages
+    )
+    split = all(
+        usage.get("token_accounting") == "provider_split"
+        and usage.get("input_tokens") is not None
+        and usage.get("output_tokens") is not None
+        for usage in usages
+    )
+    observed_model = next(
+        (
+            usage.get("observed_model")
+            for usage in reversed(usages)
+            if usage.get("observed_model") is not None
+        ),
+        None,
+    )
+    observed_model_ids = list(dict.fromkeys(
+        model
+        for usage in usages
+        for model in (
+            usage.get("observed_model_ids")
+            if isinstance(usage.get("observed_model_ids"), list)
+            else [usage.get("observed_model")]
+        )
+        if isinstance(model, str) and model.strip()
+    ))
+    estimated_usd = round(
+        sum(float(usage.get("estimated_usd", 0.0)) for usage in usages), 6
+    )
+    compute_proxy_usd = round(
+        sum(float(usage.get("compute_proxy_usd", 0.0)) for usage in usages), 6
+    )
+    return {
+        "model": observed_model,
+        "tokens": sum(int(usage.get("tokens", 0)) for usage in usages),
+        "usd": round(sum(float(usage.get("usd", 0.0)) for usage in usages), 6),
+        "input_tokens": (
+            sum(int(usage["input_tokens"]) for usage in usages) if split else None
+        ),
+        "output_tokens": (
+            sum(int(usage["output_tokens"]) for usage in usages) if split else None
+        ),
+        "token_accounting": "provider_split" if split else "total_only",
+        "estimated_usd": estimated_usd,
+        "compute_proxy_usd": compute_proxy_usd,
+        "requested_model": usages[0].get("requested_model"),
+        "observed_model": observed_model,
+        "observed_model_ids": observed_model_ids,
+        "successful_provider_requests": sum(
+            int(usage.get("successful_provider_requests", 0)) for usage in usages
+        ),
+        "unknown_token_usage_successes": sum(
+            int(usage.get("unknown_token_usage_successes", 0)) for usage in usages
+        ),
+        "observed_model_response_count": sum(
+            int(usage.get("observed_model_response_count", 0)) for usage in usages
+        ),
+        "unobserved_model_successes": sum(
+            int(usage.get("unobserved_model_successes", 0)) for usage in usages
+        ),
+    }
+
+
+def _result_usage(
+    *,
+    model: str | None,
+    tokens: int,
+    usd: float,
+    usage: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """정규화 결과에 공통 usage 계약을 붙인다."""
+    values = usage or {}
+    observed_model = values.get("observed_model", model)
+    if observed_model is not None and (
+        not isinstance(observed_model, str) or not observed_model.strip()
+    ):
+        raise ValueError("VLM observed_model은 null 또는 빈 값이 아닌 문자열이어야 합니다.")
+    if isinstance(observed_model, str):
+        observed_model = observed_model.strip()
+    tokens_value = nonnegative_int(
+        values.get("tokens", MISSING), name="vlm.tokens", default=tokens
+    )
+    usd_value = nonnegative_finite_float(
+        values.get("usd", MISSING), name="vlm.usd", default=usd
+    )
+    estimated_usd = nonnegative_finite_float(
+        values.get("estimated_usd", MISSING),
+        name="vlm.estimated_usd",
+        default=usd_value,
+    )
+    compute_proxy_usd = nonnegative_finite_float(
+        values.get("compute_proxy_usd", MISSING),
+        name="vlm.compute_proxy_usd",
+        default=0.0,
+    )
+    successful_requests = nonnegative_int(
+        values.get("successful_provider_requests", MISSING),
+        name="vlm.successful_provider_requests",
+        default=0,
+    )
+    accounting = values.get("token_accounting", "total_only")
+    if accounting not in {
+        "provider_split", "estimated_split", "mixed_split", "total_only"
+    }:
+        raise ValueError("VLM token_accounting 값이 올바르지 않습니다.")
+    raw_input = values.get("input_tokens")
+    raw_output = values.get("output_tokens")
+    if accounting == "total_only":
+        if raw_input is not None or raw_output is not None:
+            raise ValueError("VLM total_only usage에 분리 토큰을 둘 수 없습니다.")
+        input_tokens = output_tokens = None
+    else:
+        input_tokens = nonnegative_int(raw_input, name="vlm.input_tokens")
+        output_tokens = nonnegative_int(raw_output, name="vlm.output_tokens")
+        if input_tokens + output_tokens != tokens_value:
+            raise ValueError("VLM 입력·출력 토큰 합이 전체와 다릅니다.")
+    observed_ids = values.get("observed_model_ids")
+    if observed_ids is None:
+        observed_ids = [observed_model] if observed_model else []
+    if not isinstance(observed_ids, list) or any(
+        not isinstance(value, str) or not value.strip() for value in observed_ids
+    ):
+        raise ValueError("VLM observed_model_ids가 올바르지 않습니다.")
+    unknown_tokens = nonnegative_int(
+        values.get("unknown_token_usage_successes", MISSING),
+        name="vlm.unknown_token_usage_successes",
+        default=(successful_requests if accounting == "total_only" and tokens_value == 0 else 0),
+    )
+    observed_count = nonnegative_int(
+        values.get("observed_model_response_count", MISSING),
+        name="vlm.observed_model_response_count",
+        default=(1 if successful_requests and observed_model else 0),
+    )
+    unobserved_count = nonnegative_int(
+        values.get("unobserved_model_successes", MISSING),
+        name="vlm.unobserved_model_successes",
+        default=(0 if observed_model else successful_requests),
+    )
+    if unknown_tokens > successful_requests:
+        raise ValueError("VLM token usage 미지 수가 provider 성공 수보다 큽니다.")
+    if observed_count + unobserved_count != successful_requests:
+        raise ValueError("VLM model ID 관측 카운터가 provider 성공 수와 다릅니다.")
+    if observed_count and not observed_ids:
+        raise ValueError("VLM model ID 관측 응답이 있지만 observed_model_ids가 비었습니다.")
+    if observed_model and observed_model not in observed_ids:
+        raise ValueError("VLM observed_model이 observed_model_ids에 없습니다.")
+    if (
+        successful_requests
+        and accounting == "total_only"
+        and tokens_value == 0
+        and not unknown_tokens
+    ):
+        raise ValueError("VLM token usage 누락을 미지 성공으로 기록해야 합니다.")
+    return {
+        # 예전 model 필드도 요청값이 아닌 실제 응답 ID를 의미한다.
+        "model": observed_model,
+        "tokens": tokens_value,
+        "usd": round(usd_value, 6),
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "token_accounting": accounting,
+        "estimated_usd": round(estimated_usd, 6),
+        "compute_proxy_usd": round(compute_proxy_usd, 6),
+        "requested_model": values.get("requested_model", model),
+        "observed_model": observed_model,
+        "observed_model_ids": list(dict.fromkeys(observed_ids)),
+        "successful_provider_requests": successful_requests,
+        "unknown_token_usage_successes": unknown_tokens,
+        "observed_model_response_count": observed_count,
+        "unobserved_model_successes": unobserved_count,
+    }
+
+
+
+
+def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
                       tokens: int, usd: float,
-                      item: str | None = None) -> dict[str, Any]:
+                      item: str | None = None,
+                      usage: dict[str, Any] | None = None) -> dict[str, Any]:
+    result_usage = _result_usage(
+        model=model,
+        tokens=tokens,
+        usd=usd,
+        usage=usage,
+    )
     if style == "baseline":
         verdict = str(raw.get("verdict", "")).upper()
         raw_defect_type = raw.get("defect_type")
@@ -249,9 +463,7 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str,
             ),
             "regions": _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"}),
             "features": features,
-            "model": model,
-            "tokens": tokens,
-            "usd": round(float(usd), 6),
+            **result_usage,
             "verdict": verdict,
             "defect_type": defect_type,
             "observations": observations,
@@ -268,18 +480,14 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str,
             "anomaly_seen": None,
             "regions": [],
             "features": [],
-            "model": model,
-            "tokens": tokens,
-            "usd": round(float(usd), 6),
+            **result_usage,
         }
     return {
         "text": normalized_text,
         "anomaly_seen": _as_bool(raw.get("anomaly_seen")),
         "regions": _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"}),
         "features": _as_string_list(raw.get("features")),
-        "model": model,
-        "tokens": tokens,
-        "usd": round(float(usd), 6),
+        **result_usage,
     }
 
 
@@ -346,7 +554,9 @@ class VLMBackend(ABC):
         self.model = model
 
     @abstractmethod
-    async def _request(self, prompt: str, images: list[str]) -> tuple[str, int, float]:
+    async def _request(
+        self, prompt: str, images: list[str]
+    ) -> tuple[str, dict[str, Any]]:
         """백엔드에 프롬프트와 base64 PNG 목록을 보낸다."""
 
     @traceable(run_type="llm", name="vlm.observe")
@@ -365,7 +575,7 @@ class VLMBackend(ABC):
         prompt = _prompt(style, item=item, region=region,
                          has_reference=bool(reference_path), extra_context=extra_context)
 
-        content, tokens, usd = await self._request(prompt, images)
+        content, usage = await self._request(prompt, images)
         raw = _parse_json(content)
         if not _has_korean(_language_text(raw, style)):
             retry_prompt = (
@@ -373,13 +583,19 @@ class VLMBackend(ABC):
                 + "\n\n이전 응답의 관찰문이 한국어가 아니었다. "
                   "필드명과 결함 유형 코드를 제외한 모든 설명을 반드시 한국어로 다시 작성하라."
             )
-            content, retry_tokens, retry_usd = await self._request(retry_prompt, images)
-            tokens += retry_tokens
-            usd += retry_usd
+            content, retry_usage = await self._request(retry_prompt, images)
+            usage = _merge_request_usage(usage, retry_usage)
             raw = _parse_json(content)
 
-        return _normalize_result(raw, style=style, model=self.name,
-                                 tokens=tokens, usd=usd, item=item)
+        return _normalize_result(
+            raw,
+            style=style,
+            model=usage.get("observed_model"),
+            tokens=usage.get("tokens", 0),
+            usd=usage.get("usd", 0.0),
+            item=item,
+            usage=usage,
+        )
 
 
 class FakeVLM(VLMBackend):
@@ -399,8 +615,30 @@ class FakeVLM(VLMBackend):
             return None
         return self._labels_by_hash.get(file_hash)
 
-    async def _request(self, prompt: str, images: list[str]) -> tuple[str, int, float]:
+    async def _request(
+        self, prompt: str, images: list[str]
+    ) -> tuple[str, dict[str, Any]]:
         raise NotImplementedError("FakeVLM은 이미지를 외부 모델에 보내지 않습니다.")
+
+    def _usage(self, normalized_path: str, text: str, tokens: int) -> dict[str, Any]:
+        input_tokens = min(len(normalized_path) // 4, tokens)
+        return {
+            "model": self.name,
+            "tokens": tokens,
+            "usd": 0.0,
+            "input_tokens": input_tokens,
+            "output_tokens": tokens - input_tokens,
+            "token_accounting": "estimated_split",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": self.name,
+            "successful_provider_requests": 0,
+            "observed_model_ids": [self.name],
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 0,
+            "unobserved_model_successes": 0,
+        }
 
     @staticmethod
     def _regions(image_path: str, region: str) -> list[str]:
@@ -429,14 +667,13 @@ class FakeVLM(VLMBackend):
         match = re.search(r"(?:^|/)test/([^/]+)(?:/|$)", normalized_path)
         defect_type = match.group(1) if match else self._label_from_hash(image_path)
         if defect_type is None:
+            usage = self._usage(normalized_path, "판독 불가", 0)
             result: dict[str, Any] = {
                 "text": "판독 불가",
                 "anomaly_seen": None,
                 "regions": [],
                 "features": [],
-                "model": self.name,
-                "tokens": 0,
-                "usd": 0.0,
+                **usage,
             }
             if style == "baseline":
                 result.update({
@@ -448,14 +685,13 @@ class FakeVLM(VLMBackend):
             return result
 
         if defect_type not in load_type_map().get(item, {}):
+            usage = self._usage(normalized_path, "판독 불가", 0)
             result = {
                 "text": "판독 불가",
                 "anomaly_seen": None,
                 "regions": [],
                 "features": [],
-                "model": self.name,
-                "tokens": 0,
-                "usd": 0.0,
+                **usage,
             }
             if style == "baseline":
                 result.update({
@@ -489,14 +725,13 @@ class FakeVLM(VLMBackend):
                 regions = unflip_regions(regions)
 
         tokens = (len(normalized_path) + len(text)) // 4 + 1
+        usage = self._usage(normalized_path, text, tokens)
         result: dict[str, Any] = {
             "text": text,
             "anomaly_seen": anomaly_seen,
             "regions": regions,
             "features": features,
-            "model": self.name,
-            "tokens": tokens,
-            "usd": 0.0,
+            **usage,
         }
         if style == "baseline":
             result.update({
@@ -511,12 +746,19 @@ class FakeVLM(VLMBackend):
 class OllamaVLM(VLMBackend):
     """로컬 Ollama의 vision chat API를 사용한다."""
 
-    def __init__(self, model: str = "qwen2.5vl:3b"):
+    def __init__(
+        self,
+        model: str = "qwen2.5vl:3b",
+        compute_proxy_usd_per_1k: float = 0.005,
+    ):
         super().__init__(model)
         self.name = f"ollama:{model}"
+        self.compute_proxy_usd_per_1k = compute_proxy_usd_per_1k
         self.url = os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL).rstrip("/") + "/api/chat"
 
-    async def _request(self, prompt: str, images: list[str]) -> tuple[str, int, float]:
+    async def _request(
+        self, prompt: str, images: list[str]
+    ) -> tuple[str, dict[str, Any]]:
         payload = {
             "model": self.model,
             "messages": [{"role": "user", "content": prompt, "images": images}],
@@ -532,8 +774,32 @@ class OllamaVLM(VLMBackend):
         response.raise_for_status()
         data = response.json()
         content = data.get("message", {}).get("content", "")
-        tokens = (data.get("prompt_eval_count") or 0) + (data.get("eval_count") or 0)
-        return str(content), int(tokens), 0.0
+        input_tokens = _usage_count(data, "prompt_eval_count", provider="Ollama")
+        output_tokens = _usage_count(data, "eval_count", provider="Ollama")
+        has_split = input_tokens is not None and output_tokens is not None
+        tokens = input_tokens + output_tokens if has_split else 0
+        observed_model = _observed_model("ollama", data.get("model"))
+        compute_proxy_usd = round(
+            tokens / 1000 * self.compute_proxy_usd_per_1k, 6
+        )
+        usage = {
+            "model": observed_model,
+            "tokens": tokens,
+            "usd": 0.0,
+            "input_tokens": input_tokens if has_split else None,
+            "output_tokens": output_tokens if has_split else None,
+            "token_accounting": "provider_split" if has_split else "total_only",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": compute_proxy_usd,
+            "requested_model": self.name,
+            "observed_model": observed_model,
+            "observed_model_ids": [observed_model] if observed_model else [],
+            "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0 if has_split else 1,
+            "observed_model_response_count": 1 if observed_model else 0,
+            "unobserved_model_successes": 0 if observed_model else 1,
+        }
+        return str(content), usage
 
 
 class OpenAIVLM(VLMBackend):
@@ -543,9 +809,11 @@ class OpenAIVLM(VLMBackend):
         super().__init__(model)
         self.name = f"openai:{model}"
         self.api_key = os.environ.get("OPENAI_API_KEY", "")
-        self.usd_per_million = 0.15 if model.startswith("gpt-4o-mini") else 2.5
+        self.usd_per_million = openai_vlm_usd_per_million(model)
 
-    async def _request(self, prompt: str, images: list[str]) -> tuple[str, int, float]:
+    async def _request(
+        self, prompt: str, images: list[str]
+    ) -> tuple[str, dict[str, Any]]:
         if not self.api_key:
             raise RuntimeError(
                 "OPENAI_API_KEY가 설정되지 않았습니다 — .env 또는 환경변수로 지정하세요."
@@ -573,9 +841,38 @@ class OpenAIVLM(VLMBackend):
         response.raise_for_status()
         data = response.json()
         answer = data.get("choices", [{}])[0].get("message", {}).get("content", "")
-        tokens = int(data.get("usage", {}).get("total_tokens") or 0)
-        usd = tokens / 1_000_000 * self.usd_per_million
-        return str(answer), tokens, usd
+        raw_usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+        input_tokens = _usage_count(raw_usage, "prompt_tokens", provider="OpenAI")
+        output_tokens = _usage_count(raw_usage, "completion_tokens", provider="OpenAI")
+        total_tokens = _usage_count(raw_usage, "total_tokens", provider="OpenAI")
+        has_split = input_tokens is not None and output_tokens is not None
+        token_usage_known = has_split or total_tokens is not None
+        if has_split:
+            total_tokens = input_tokens + output_tokens
+        elif total_tokens is None:
+            total_tokens = 0
+        estimated_usd = round(
+            total_tokens / 1_000_000 * self.usd_per_million, 6
+        )
+        observed_model = _observed_model("openai", data.get("model"))
+        usage = {
+            "model": observed_model,
+            "tokens": total_tokens,
+            "usd": estimated_usd,
+            "input_tokens": input_tokens if has_split else None,
+            "output_tokens": output_tokens if has_split else None,
+            "token_accounting": "provider_split" if has_split else "total_only",
+            "estimated_usd": estimated_usd,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": observed_model,
+            "observed_model_ids": [observed_model] if observed_model else [],
+            "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0 if token_usage_known else 1,
+            "observed_model_response_count": 1 if observed_model else 0,
+            "unobserved_model_successes": 0 if observed_model else 1,
+        }
+        return str(answer), usage
 
 
 def make_vlm(role: Role) -> VLMBackend:
@@ -591,7 +888,8 @@ def make_vlm(role: Role) -> VLMBackend:
     env_name = "VLM_OBSERVER_MODEL" if role == "observer" else "VLM_CROSS_MODEL"
     if backend == "ollama":
         model = os.environ.get(env_name, "qwen2.5vl:3b")
-        return OllamaVLM(model)
+        proxy_rate = 0.00015 if role == "observer" else 0.005
+        return OllamaVLM(model, compute_proxy_usd_per_1k=proxy_rate)
     if backend == "openai":
         default_model = "gpt-4o-mini" if role == "observer" else "gpt-4o"
         model = os.environ.get(env_name, default_model)

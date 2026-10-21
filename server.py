@@ -206,15 +206,6 @@ async def version():
 
 def _metadata(result: dict, run_id: str | None) -> dict:
     report = result.get("report") if isinstance(result.get("report"), dict) else {}
-    observations = result.get("observations")
-    observation_count = len(observations) if isinstance(observations, list) else 0
-    cross_check = result.get("cross_check")
-    if result.get("route") != "inspection":
-        vlm_calls = 0
-    elif app.state.deps.version == "v1":
-        vlm_calls = 1
-    else:
-        vlm_calls = observation_count + int(bool(cross_check))
     approval = result.get("approval")
     return {
         "route": result.get("route"),
@@ -236,7 +227,19 @@ def _metadata(result: dict, run_id: str | None) -> dict:
             approval.get("required") if isinstance(approval, dict) else False
         ) or bool(result.get("__interrupt__")),
         "hitl_mode": app.state.deps.hitl_mode,
-        "vlm_calls": vlm_calls,
+        "successful_provider_requests": result.get(
+            "successful_provider_requests", 0
+        ),
+        "successful_vlm_requests": result.get("successful_vlm_requests", 0),
+        "unknown_token_usage_successes": result.get(
+            "unknown_token_usage_successes", 0
+        ),
+        "unobserved_model_successes": result.get(
+            "unobserved_model_successes", 0
+        ),
+        "observed_model_response_count": result.get(
+            "observed_model_response_count", 0
+        ),
         "ablation": result.get("ablation", app.state.deps.ablation),
         "llm_backend": app.state.llm_backend,
         "supervisor_version": app.state.deps.version,
@@ -324,6 +327,7 @@ def _initial_state(
         "validation_attempts": 0,
         "validation_feedback": None,
         "validation_passed": False,
+        "validation_terminal": False,
         "final": "",
         "last_prompt": "",
         "image_path": image_path,
@@ -345,6 +349,17 @@ def _initial_state(
         "events": [],
         "cost_usd": 0.0,
         "tokens": 0,
+        "input_tokens": None,
+        "output_tokens": None,
+        "token_accounting": None,
+        "estimated_usd": 0.0,
+        "compute_proxy_usd": 0.0,
+        "observed_model_ids": [],
+        "successful_provider_requests": 0,
+        "successful_vlm_requests": 0,
+        "unknown_token_usage_successes": 0,
+        "unobserved_model_successes": 0,
+        "observed_model_response_count": 0,
         "ablation": ablation,
         "hitl_rejections": 0,
         "_observer_result": {},

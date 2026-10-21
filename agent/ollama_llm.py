@@ -5,8 +5,9 @@ qwen3:8b)는 최종 답변 작성 전담. Ollama의 구조화 출력(format=<JSO
 temperature=0으로 변동을 줄이지만 실모델이므로 결정론은 아니다 — 그래서 gate(W6)·
 replan(W7)·validator(W8)가 연출이 아니라 실제 방어선으로 동작한다.
 fc
-비용(cost_usd)은 '가상 단가 × 실측 토큰 수(prompt_eval_count+eval_count)'다 — 로컬
-추론이라 실제 과금은 0이지만, W10a의 모델 분리 효과를 같은 잣대로 비교하기 위함이다.
+가상 단가 × 실측 토큰 수(prompt_eval_count+eval_count)는
+``compute_proxy_usd``로 기록한다. 로컬 추론은 API 과금이 없으므로
+``estimated_usd``는 0으로 분리한다. ``usd``는 기존 호환용 프록시 값이다.
 
 사전 조건: `ollama serve` 실행 중 + `ollama pull qwen3:0.6b qwen3:8b`.
 """
@@ -18,6 +19,16 @@ import httpx
 from langsmith import traceable
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+
+
+def _usage_count(data: dict, key: str) -> int | None:
+    """Ollama usage의 누락과 잘못된 값을 구분한다."""
+    if key not in data:
+        return None
+    value = data[key]
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise RuntimeError(f"Ollama {key}이 0 이상 정수가 아닙니다.")
+    return value
 
 
 def _load_known_systems() -> set[str]:
@@ -195,6 +206,36 @@ class OllamaLLM:
         self.model = model
         self.usd_per_1k = usd_per_1k_tokens
 
+    def _usage(self, data: dict) -> dict:
+        """실제 응답이 제공한 토큰과 모델 ID만 기록한다."""
+        input_tokens = _usage_count(data, "prompt_eval_count")
+        output_tokens = _usage_count(data, "eval_count")
+        has_split = input_tokens is not None and output_tokens is not None
+        tokens = input_tokens + output_tokens if has_split else 0
+        observed_model = data.get("model")
+        observed_model = (
+            f"ollama:{observed_model.strip()}"
+            if isinstance(observed_model, str) and observed_model.strip()
+            else None
+        )
+        compute_proxy_usd = round(tokens / 1000 * self.usd_per_1k, 6)
+        return {
+            "model": self.name,
+            "tokens": tokens,
+            "usd": compute_proxy_usd,
+            "input_tokens": input_tokens if has_split else None,
+            "output_tokens": output_tokens if has_split else None,
+            "token_accounting": "provider_split" if has_split else "total_only",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": compute_proxy_usd,
+            "requested_model": self.name,
+            "observed_model": observed_model,
+            "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0 if has_split else 1,
+            "observed_model_response_count": 1 if observed_model else 0,
+            "unobserved_model_successes": 0 if observed_model else 1,
+        }
+
     def _chat(self, system: str, user: str, schema: dict | None = None) -> tuple[str, dict]:
         payload = {
             "model": self.model,
@@ -209,10 +250,7 @@ class OllamaLLM:
         resp.raise_for_status()
         data = resp.json()
         content = data["message"]["content"]
-        tokens = (data.get("prompt_eval_count") or 0) + (data.get("eval_count") or 0)
-        usage = {"model": self.name, "tokens": tokens,
-                 "usd": round(tokens / 1000 * self.usd_per_1k, 6)}
-        return content, usage
+        return content, self._usage(data)
 
     async def _chat_stream(self, system: str, user: str, on_token=None,
                            schema: dict | None = None) -> tuple[str, dict]:
@@ -230,24 +268,50 @@ class OllamaLLM:
         if schema is not None:
             payload["format"] = schema
         chunks: list[str] = []
-        usage = {"model": self.name, "tokens": 0, "usd": 0.0}
+        usage = {
+            "model": self.name,
+            "tokens": 0,
+            "usd": 0.0,
+            "input_tokens": None,
+            "output_tokens": None,
+            "token_accounting": "total_only",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": None,
+            "successful_provider_requests": 0,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 0,
+            "unobserved_model_successes": 0,
+        }
         async with httpx.AsyncClient(timeout=300.0) as client:
             async with client.stream("POST", OLLAMA_URL, json=payload) as resp:
                 resp.raise_for_status()
+                usage["successful_provider_requests"] = 1
+                usage["unknown_token_usage_successes"] = 1
+                usage["unobserved_model_successes"] = 1
                 async for line in resp.aiter_lines():
                     if not line:
                         continue
                     data = json.loads(line)
+                    observed_model = data.get("model")
+                    if isinstance(observed_model, str) and observed_model.strip():
+                        usage["observed_model"] = f"ollama:{observed_model.strip()}"
+                        usage["observed_model_response_count"] = 1
+                        usage["unobserved_model_successes"] = 0
                     piece = data.get("message", {}).get("content", "")
                     if piece:
                         chunks.append(piece)
                         if on_token is not None:
                             on_token(piece)
                     if data.get("done"):
-                        tokens = ((data.get("prompt_eval_count") or 0)
-                                  + (data.get("eval_count") or 0))
-                        usage = {"model": self.name, "tokens": tokens,
-                                 "usd": round(tokens / 1000 * self.usd_per_1k, 6)}
+                        final_usage = self._usage(data)
+                        if final_usage["observed_model"] is None:
+                            final_usage["observed_model"] = usage["observed_model"]
+                            if usage["observed_model"] is not None:
+                                final_usage["observed_model_response_count"] = 1
+                                final_usage["unobserved_model_successes"] = 0
+                        usage = final_usage
         usage["prompt"] = f"[SYSTEM]\n{system}\n\n[USER]\n{user}"
         return "".join(chunks), usage
 

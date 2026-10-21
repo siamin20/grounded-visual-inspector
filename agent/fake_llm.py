@@ -17,8 +17,25 @@ class FakeLLM:
 
     def _usage(self, prompt: str, completion: str) -> dict:
         tokens = (len(prompt) + len(completion)) // 4 + 1
-        return {"model": self.name, "tokens": tokens,
-                "usd": round(tokens / 1000 * self.usd_per_1k, 6)}
+        input_tokens = min(len(prompt) // 4, tokens)
+        output_tokens = tokens - input_tokens
+        legacy_proxy = round(tokens / 1000 * self.usd_per_1k, 6)
+        return {
+            "model": self.name,
+            "tokens": tokens,
+            "usd": legacy_proxy,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "token_accounting": "estimated_split",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": self.name,
+            "successful_provider_requests": 0,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 0,
+            "unobserved_model_successes": 0,
+        }
 
 
 class FastLLM(FakeLLM):

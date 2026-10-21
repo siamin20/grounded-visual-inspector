@@ -107,6 +107,7 @@ def _judgement(status: str) -> dict:
         ("O+", "C?", "V+", True, "", "REJECT", "low", None, False),
         ("O?", "C+", "V+", True, "", "REJECT", "low", None, False),
         ("O-", "C+", "V+", True, "", "REJECT", "low", None, False),
+        ("O+", "C+", "V0", True, "", "ABSTAIN", "low", "ungrounded_anomaly", True),
         ("O+", "C-", "V0", True, "", "ABSTAIN", "low", "ungrounded_anomaly", False),
         ("O-", "C+", "V0", True, "", "ABSTAIN", "low", "ungrounded_anomaly", False),
         ("O-", "C-", "V+", True, "", "ABSTAIN", "low", "evidence_conflict", True),

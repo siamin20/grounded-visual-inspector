@@ -29,12 +29,18 @@ def _after_replan(state: AgentState) -> str:
 
 def _after_hitl(state: AgentState) -> str:
     approval = state.get("approval") or {}
-    return "write" if approval.get("decision") == "reject" else "validate"
+    if state.get("validation_terminal") and not state.get("validation_passed"):
+        # 재작성 상한의 검증 실패는 approve/reject 어떤
+        # 응답으로도 4번째 초안을 만들어 우회할 수 없다.
+        return "finalize"
+    if approval.get("decision") == "reject":
+        return "write"
+    return "validate"
 
 
 def _after_validate(state: AgentState) -> str:
     if not state.get("validation_passed"):
-        return "write"
+        return "hitl" if state.get("validation_terminal") else "write"
     approval = state.get("approval") or {}
     if approval.get("required") and approval.get("decision") is None:
         # 재작성 상한 뒤 만든 validation_failure ABSTAIN도 사람 승인을 거친다.
@@ -75,7 +81,9 @@ def build_graph(deps: SupervisorDeps, checkpointer=None):
     graph.add_edge("analysis", "write")
     graph.add_edge("write", "hitl")
     graph.add_conditional_edges(
-        "hitl", _after_hitl, {"write": "write", "validate": "validate"}
+        "hitl",
+        _after_hitl,
+        {"write": "write", "validate": "validate", "finalize": "finalize"},
     )
     graph.add_conditional_edges(
         "validate",

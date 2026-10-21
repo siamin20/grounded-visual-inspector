@@ -7,7 +7,8 @@ VLM 호출은 Tool로 격리하고, 기준서와 조치 가이드는 Resource로
 from pathlib import Path
 
 from fastmcp import FastMCP
-from pydantic import BaseModel, Field, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, model_serializer, model_validator
+from typing import Literal
 
 from agent.vision.backends import VLMBackend, make_vlm
 
@@ -21,19 +22,99 @@ _BACKENDS: dict[str, VLMBackend] = {}
 
 
 class InspectResult(BaseModel):
+    model_config = ConfigDict(strict=True)
+
     text: str = Field(description="이미지에서 관찰한 사실")
     anomaly_seen: bool | None = Field(description="이상 징후 관찰 여부")
     regions: list[str] = Field(default_factory=list, description="이상이 관찰된 영역")
     features: list[str] = Field(default_factory=list, description="관찰된 시각 특징")
-    model: str = Field(description="관찰에 사용한 모델")
-    tokens: int = Field(default=0, description="사용 토큰 수")
-    usd: float = Field(default=0.0, description="추정 비용(USD)")
+    model: str | None = Field(
+        default=None,
+        description="provider 응답에서 관찰된 실제 모델 ID",
+    )
+    tokens: int = Field(description="사용 토큰 수", ge=0)
+    usd: float = Field(description="기존 호환 비용 값(실제 청구액 아님)", ge=0, allow_inf_nan=False)
+    input_tokens: int | None = Field(default=None, ge=0, description="입력 토큰 수")
+    output_tokens: int | None = Field(default=None, ge=0, description="출력 토큰 수")
+    token_accounting: Literal[
+        "provider_split", "estimated_split", "mixed_split", "total_only"
+    ] = Field(description="토큰 분해 근거")
+    estimated_usd: float = Field(description="OpenAI 추정 비용", ge=0, allow_inf_nan=False)
+    compute_proxy_usd: float = Field(
+        description="Ollama 계산 자원 프록시",
+        ge=0,
+        allow_inf_nan=False,
+    )
+    requested_model: str = Field(description="요청한 backend:model ID")
+    observed_model: str | None = Field(
+        default=None,
+        description="provider 응답의 실제 backend:model ID",
+    )
+    successful_provider_requests: int = Field(
+        description="성공 응답을 받은 provider 요청 수",
+        ge=0,
+    )
+    unknown_token_usage_successes: int = Field(
+        description="token usage가 누락된 provider 성공 수", ge=0
+    )
+    observed_model_response_count: int = Field(
+        description="실제 모델 ID를 반환한 provider 성공 수", ge=0
+    )
+    unobserved_model_successes: int = Field(
+        description="모델 ID가 누락된 provider 성공 수", ge=0
+    )
+    observed_model_ids: list[str] = Field(
+        description="provider 응답에서 관측한 모델 ID 합집합"
+    )
     region: str = Field(description="요청한 검사 영역")
     flip: bool = Field(description="좌우 반전 적용 여부")
     verdict: str | None = Field(default=None, description="baseline 판정")
     defect_type: str | None = Field(default=None, description="baseline 결함 유형")
     observations: list[str] | None = Field(default=None, description="baseline 관찰 목록")
     abstain_reason: str | None = Field(default=None, description="baseline 판정 보류 사유")
+
+    @model_validator(mode="after")
+    def _validate_usage_contract(self):
+        if self.token_accounting == "total_only":
+            if self.input_tokens is not None or self.output_tokens is not None:
+                raise ValueError("total_only usage에 분리 토큰을 둘 수 없습니다.")
+        else:
+            if self.input_tokens is None or self.output_tokens is None:
+                raise ValueError("분리 token accounting에 입력·출력 토큰이 필요합니다.")
+            if self.input_tokens + self.output_tokens != self.tokens:
+                raise ValueError("입력·출력 토큰 합이 전체와 다릅니다.")
+        if (
+            self.observed_model_response_count + self.unobserved_model_successes
+            != self.successful_provider_requests
+        ):
+            raise ValueError("모델 ID 관측 카운트가 provider 성공 수와 다릅니다.")
+        if self.unknown_token_usage_successes > self.successful_provider_requests:
+            raise ValueError("토큰 미지 성공 수가 provider 성공 수보다 큽니다.")
+        if any(not value.strip() or value != value.strip() for value in self.observed_model_ids):
+            raise ValueError("관측 모델 ID는 빈 문자열일 수 없습니다.")
+        if len(self.observed_model_ids) != len(set(self.observed_model_ids)):
+            raise ValueError("관측 모델 ID는 중복될 수 없습니다.")
+        if self.observed_model_response_count and not self.observed_model_ids:
+            raise ValueError("관측 model ID 응답이 있지만 ID 목록이 비었습니다.")
+        if self.observed_model is not None:
+            if not self.observed_model.strip():
+                raise ValueError("observed_model은 빈 문자열일 수 없습니다.")
+            if self.observed_model not in self.observed_model_ids:
+                raise ValueError("observed_model이 observed_model_ids에 없습니다.")
+        if self.model is not None and not self.model.strip():
+            raise ValueError("model은 빈 문자열일 수 없습니다.")
+        if self.model != self.observed_model:
+            raise ValueError("model은 observed_model의 기존 호환 별칭여야 합니다.")
+        if not self.requested_model.strip():
+            raise ValueError("requested_model은 빈 문자열일 수 없습니다.")
+        if (
+            self.successful_provider_requests
+            and self.token_accounting == "total_only"
+            and self.tokens == 0
+            and not self.unknown_token_usage_successes
+        ):
+            raise ValueError("token usage 누락을 미지 성공으로 기록해야 합니다.")
+        return self
 
     @model_serializer(mode="wrap")
     def _serialize_without_none(self, handler):
@@ -80,9 +161,21 @@ async def inspect_image(
         anomaly_seen=result.get("anomaly_seen"),
         regions=result.get("regions", []),
         features=result.get("features", []),
-        model=result["model"],
-        tokens=result.get("tokens", 0),
-        usd=result.get("usd", 0.0),
+        model=result.get("model"),
+        tokens=result["tokens"],
+        usd=result["usd"],
+        input_tokens=result.get("input_tokens"),
+        output_tokens=result.get("output_tokens"),
+        token_accounting=result["token_accounting"],
+        estimated_usd=result["estimated_usd"],
+        compute_proxy_usd=result["compute_proxy_usd"],
+        requested_model=result["requested_model"],
+        observed_model=result.get("observed_model"),
+        successful_provider_requests=result["successful_provider_requests"],
+        unknown_token_usage_successes=result["unknown_token_usage_successes"],
+        observed_model_response_count=result["observed_model_response_count"],
+        unobserved_model_successes=result["unobserved_model_successes"],
+        observed_model_ids=result["observed_model_ids"],
         region=region,
         flip=flip,
         verdict=result.get("verdict"),

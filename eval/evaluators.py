@@ -13,6 +13,13 @@ from collections.abc import Iterable, Mapping
 from statistics import NormalDist
 from typing import Any
 
+from agent.usage import (
+    MISSING,
+    UsageValueError,
+    nonnegative_finite_float,
+    nonnegative_int,
+)
+
 
 Row = Mapping[str, Any]
 
@@ -1128,30 +1135,168 @@ def _percentile(values: list[float], quantile: float) -> float:
     return ordered[lower] * (1.0 - weight) + ordered[upper] * weight
 
 
-def cost_latency(rows: Iterable[Row]) -> dict[str, int | float]:
+def cost_latency(rows: Iterable[Row]) -> dict[str, int | float | None]:
     """조건별 실행 지연·비용·HITL 지표를 집계한다.
 
-    오류 행도 실행 비용이 발생할 수 있으므로 제외하지 않는다. 수치가 아닌 값은
-    0으로 처리하며, 오류 행에 기록된 비용도 포함한다.
+    오류 행도 실행 비용이 발생할 수 있으므로 제외하지 않는다. 누락된 수치는
+    명시적 기본값으로 처리하지만, 존재하는 잘못된 값은 집계를 중단한다.
     """
 
     materialized = [row for row in rows if isinstance(row, Mapping)]
     count = len(materialized)
-    latencies = [max(0.0, _number(row.get("latency_s"))) for row in materialized]
-    tokens = [max(0.0, _number(row.get("tokens"))) for row in materialized]
-    costs = [max(0.0, _number(row.get("usd"))) for row in materialized]
-    attempts = [max(0.0, _number(row.get("validation_attempts"))) for row in materialized]
+    latencies: list[float] = []
+    tokens: list[int] = []
+    input_tokens: list[int] = []
+    output_tokens: list[int] = []
+    split_tokens_complete = True
+    costs: list[float] = []
+    compute_proxy_costs: list[float] = []
+    attempts: list[int] = []
+    validation_rejections: list[int] = []
+    retries: list[int] = []
+    replans: list[int] = []
+    provider_requests: list[int] = []
+    vlm_requests: list[int] = []
+    unknown_usage_n = 0
+    for index, row in enumerate(materialized, start=1):
+        prefix = f"평가 결과 {index}"
+        try:
+            latencies.append(nonnegative_finite_float(
+                row.get("latency_s", MISSING),
+                name=f"{prefix}.latency_s",
+                default=0.0,
+            ))
+            tokens.append(nonnegative_int(
+                row.get("tokens", MISSING),
+                name=f"{prefix}.tokens",
+                default=0,
+            ))
+            accounting = row.get("token_accounting", "total_only")
+            if accounting in {"provider_split", "estimated_split", "mixed_split"}:
+                row_input = nonnegative_int(
+                    row.get("input_tokens", MISSING),
+                    name=f"{prefix}.input_tokens",
+                )
+                row_output = nonnegative_int(
+                    row.get("output_tokens", MISSING),
+                    name=f"{prefix}.output_tokens",
+                )
+                if row_input + row_output != tokens[-1]:
+                    raise UsageValueError(
+                        f"{prefix} 입력·출력 토큰 합이 전체 토큰과 다릅니다."
+                    )
+                input_tokens.append(row_input)
+                output_tokens.append(row_output)
+            elif accounting == "total_only":
+                if row.get("input_tokens") is not None or row.get("output_tokens") is not None:
+                    raise UsageValueError(
+                        f"{prefix} total_only 토큰에 분리값이 있습니다."
+                    )
+                split_tokens_complete = False
+            else:
+                raise UsageValueError(f"{prefix}.token_accounting 값이 올바르지 않습니다.")
+            if "estimated_usd" in row:
+                raw_cost = row["estimated_usd"]
+                cost_name = f"{prefix}.estimated_usd"
+            else:
+                raw_cost = row.get("usd", MISSING)
+                cost_name = f"{prefix}.usd"
+            costs.append(nonnegative_finite_float(
+                raw_cost,
+                name=cost_name,
+                default=0.0,
+            ))
+            compute_proxy_costs.append(nonnegative_finite_float(
+                row.get("compute_proxy_usd", MISSING),
+                name=f"{prefix}.compute_proxy_usd",
+                default=0.0,
+            ))
+            attempts.append(nonnegative_int(
+                row.get("validation_attempts", MISSING),
+                name=f"{prefix}.validation_attempts",
+                default=0,
+            ))
+            validation_rejections.append(nonnegative_int(
+                row.get("validation_rejections", MISSING),
+                name=f"{prefix}.validation_rejections",
+                default=0,
+            ))
+            retries.append(nonnegative_int(
+                row.get("retry_count", MISSING),
+                name=f"{prefix}.retry_count",
+                default=0,
+            ))
+            replans.append(nonnegative_int(
+                row.get("replan_rounds", MISSING),
+                name=f"{prefix}.replan_rounds",
+                default=0,
+            ))
+            provider_requests.append(nonnegative_int(
+                row.get("successful_provider_requests", MISSING),
+                name=f"{prefix}.successful_provider_requests",
+                default=0,
+            ))
+            vlm_requests.append(nonnegative_int(
+                row.get("successful_vlm_requests", MISSING),
+                name=f"{prefix}.successful_vlm_requests",
+                default=0,
+            ))
+            if row.get("usage_status") in {
+                "unknown_after_error",
+                "unknown_tokens_after_success",
+            }:
+                unknown_usage_n += 1
+        except UsageValueError as exc:
+            raise EvaluationDataError(str(exc)) from exc
     approvals = [
         _as_bool(row.get("approval_required")) is True
         for row in materialized
     ]
 
-    return {
+    result: dict[str, int | float] = {
         "n": count,
         "latency_p50_s": _percentile(latencies, 0.50),
         "latency_p95_s": _percentile(latencies, 0.95),
-        "mean_tokens": _safe_div(sum(tokens), count),
-        "mean_usd": _safe_div(sum(costs), count),
+        "mean_tokens": (
+            None if unknown_usage_n else _safe_div(sum(tokens), count)
+        ),
+        "mean_input_tokens": (
+            _safe_div(sum(input_tokens), count)
+            if split_tokens_complete and count and not unknown_usage_n else None
+        ),
+        "mean_output_tokens": (
+            _safe_div(sum(output_tokens), count)
+            if split_tokens_complete and count and not unknown_usage_n else None
+        ),
+        "mean_usd": (
+            None if unknown_usage_n else _safe_div(sum(costs), count)
+        ),
+        "mean_compute_proxy_usd": (
+            None if unknown_usage_n else _safe_div(sum(compute_proxy_costs), count)
+        ),
+        "known_estimated_usd_sum": sum(
+            cost
+            for cost, row in zip(costs, materialized)
+            if row.get("usage_status") not in {
+                "unknown_after_error",
+                "unknown_tokens_after_success",
+            }
+        ),
+        "known_cost_n": count - unknown_usage_n,
+        "unknown_usage_n": unknown_usage_n,
         "hitl_rate": _safe_div(sum(approvals), count),
         "mean_validation_attempts": _safe_div(sum(attempts), count),
     }
+    if count:
+        result["mean_validation_rejections"] = _safe_div(
+            sum(validation_rejections), count
+        )
+        result["mean_retry_count"] = _safe_div(sum(retries), count)
+        result["mean_replan_rounds"] = _safe_div(sum(replans), count)
+        result["mean_successful_provider_requests"] = _safe_div(
+            sum(provider_requests), count
+        )
+        result["mean_successful_vlm_requests"] = _safe_div(
+            sum(vlm_requests), count
+        )
+    return result

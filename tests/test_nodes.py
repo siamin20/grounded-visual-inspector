@@ -11,7 +11,7 @@ from langgraph.graph import START, StateGraph
 from langgraph.types import Command
 
 from agent.fake_llm import FastLLM
-from agent.graph import _after_validate
+from agent.graph import _after_hitl, _after_validate
 from agent.nodes.analysis import analysis_node
 from agent.nodes.finalize import finalize_node
 from agent.nodes.hitl import hitl_node
@@ -185,11 +185,20 @@ def _valid_state() -> dict:
 def test_forced_validation_routes_through_hitl_before_finalize() -> None:
     assert _after_validate({"validation_passed": False}) == "write"
     assert _after_validate({
+        "validation_passed": False,
+        "validation_terminal": True,
+    }) == "hitl"
+    assert _after_validate({
         "validation_passed": True,
         "approval": {"required": True, "decision": None},
     }) == "hitl"
     assert _after_validate({
         "validation_passed": True,
+        "approval": {"required": True, "decision": "approve"},
+    }) == "finalize"
+    assert _after_hitl({
+        "validation_passed": False,
+        "validation_terminal": True,
         "approval": {"required": True, "decision": "approve"},
     }) == "finalize"
 
@@ -205,6 +214,21 @@ async def test_route_forces_non_image_request_to_chat_and_requires_known_item() 
     )
     assert chat["route"] == "chat"
     assert needs_item["route"] == "needs_item"
+
+    class FailingRouter:
+        def route(self, _query):
+            raise AssertionError("이미지 route는 provider를 호출하면 안 됩니다.")
+
+    inspection = await route_node(
+        {
+            "query": "검사",
+            "image_path": "/tmp/input.png",
+            "item": "screw",
+            "events": [],
+        },
+        SimpleNamespace(fast_llm=FailingRouter()),
+    )
+    assert inspection["route"] == "inspection"
 
 
 @pytest.mark.asyncio
@@ -238,7 +262,8 @@ async def test_validate_rejects_embellished_observation_and_forces_after_three()
 
     state["validation_attempts"] = 3
     abstained = await validate_node(state, deps)
-    assert abstained["validation_passed"] is True
+    assert abstained["validation_passed"] is False
+    assert abstained["validation_terminal"] is True
     assert abstained["report"]["verdict"] == "ABSTAIN"
     assert abstained["report"]["actions"] == ["재검사"]
     assert abstained["approval"]["required"] is True
@@ -246,7 +271,7 @@ async def test_validate_rejects_embellished_observation_and_forces_after_three()
 
 
 @pytest.mark.asyncio
-async def test_no_validate_records_would_fail_and_auto_reject_loops_once() -> None:
+async def test_no_validate_records_would_fail_and_auto_rejects_first_draft() -> None:
     state = _valid_state()
     state["report"]["spec_clauses"] = ["MADE-UP-99"]
     deps = SimpleNamespace(vector_store=ClauseStore(), ablation="no_validate")
@@ -261,13 +286,6 @@ async def test_no_validate_records_would_fail_and_auto_reject_loops_once() -> No
     assert first["approval"]["decision"] == "reject"
     assert first["hitl_rejections"] == 1
 
-    state.update(first)
-    second = await hitl_node(state, hitl_deps)
-    assert second["approval"]["decision"] == "approve"
-    assert [event["type"] for event in second["events"][-2:]] == [
-        "ApprovalRequired",
-        "ApprovalResolved",
-    ]
 
 
 @pytest.mark.asyncio
@@ -438,6 +456,7 @@ async def test_write_enforces_abstain_and_clears_previous_approval(
         confidence="low",
         abstain_reason="insufficient_visual_evidence",
         approval={"required": True, "decision": "approve", "note": "이전 초안"},
+        validation_terminal=True,
     )
     result = await write_node(
         state,
@@ -456,6 +475,7 @@ async def test_write_enforces_abstain_and_clears_previous_approval(
         "note": "",
     }
     assert result["reapproval_required"] is True
+    assert result["validation_terminal"] is False
 
 
 @pytest.mark.asyncio

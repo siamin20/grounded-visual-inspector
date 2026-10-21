@@ -8,8 +8,16 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
+from agent.vision import backends as vision_backends
 from agent.mcp_client import MCPClient
-from agent.vision.backends import FakeVLM, _normalize_result, make_vlm
+from agent.vision.backends import (
+    FakeVLM,
+    OllamaVLM,
+    OpenAIVLM,
+    VLMBackend,
+    _normalize_result,
+    make_vlm,
+)
 from agent.vision.crop import crop_region, flip_h, unflip_regions
 
 
@@ -21,6 +29,18 @@ BACKEND_KEYS = {
     "model",
     "tokens",
     "usd",
+    "input_tokens",
+    "output_tokens",
+    "token_accounting",
+    "estimated_usd",
+    "compute_proxy_usd",
+    "requested_model",
+    "observed_model",
+    "successful_provider_requests",
+    "unknown_token_usage_successes",
+    "observed_model_response_count",
+    "unobserved_model_successes",
+    "observed_model_ids",
 }
 INSPECT_KEYS = BACKEND_KEYS | {"region", "flip"}
 VALID_REGIONS = {"tl", "tr", "bl", "br", "center"}
@@ -38,6 +58,43 @@ class _ConcurrentSession:
             self.release.set()
         await asyncio.wait_for(self.release.wait(), timeout=0.2)
         return SimpleNamespace(content=[SimpleNamespace(text="{}")])
+
+
+class _StubVLM(VLMBackend):
+    name = "openai:requested"
+
+    def __init__(self, responses: list[tuple[str, dict]]) -> None:
+        super().__init__("requested")
+        self.responses = list(responses)
+
+    async def _request(self, prompt: str, images: list[str]) -> tuple[str, dict]:
+        del prompt, images
+        return self.responses.pop(0)
+
+
+class _AsyncHTTPResponse:
+    def __init__(self, payload: dict):
+        self.payload = payload
+
+    def raise_for_status(self) -> None:
+        return None
+
+    def json(self) -> dict:
+        return self.payload
+
+
+def _async_client_for(payload: dict):
+    class AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            return _AsyncHTTPResponse(payload)
+
+    return AsyncClient
 
 
 def _coordinate_image() -> Image.Image:
@@ -128,6 +185,9 @@ async def test_fake_vlm_handles_good_defect_and_non_mvtec_paths() -> None:
     assert set(good) == BACKEND_KEYS
     assert good["anomaly_seen"] is False
     assert good["regions"] == []
+    assert good["token_accounting"] == "estimated_split"
+    assert good["input_tokens"] + good["output_tokens"] == good["tokens"]
+    assert good["successful_provider_requests"] == 0
 
     assert set(defect) == BACKEND_KEYS
     assert defect["anomaly_seen"] is True
@@ -139,6 +199,122 @@ async def test_fake_vlm_handles_good_defect_and_non_mvtec_paths() -> None:
     assert unreadable["anomaly_seen"] is None
     assert unreadable["text"] == "판독 불가"
     assert unreadable["regions"] == []
+
+
+@pytest.mark.asyncio
+async def test_vlm_korean_retry_accumulates_both_successful_requests(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (8, 8), "white").save(image_path)
+    base_usage = {
+        "model": "openai:resolved-1",
+        "tokens": 6,
+        "usd": 0.001,
+        "input_tokens": 4,
+        "output_tokens": 2,
+        "token_accounting": "provider_split",
+        "estimated_usd": 0.001,
+        "compute_proxy_usd": 0.0,
+        "requested_model": "openai:requested",
+        "observed_model": "openai:resolved-1",
+        "successful_provider_requests": 1,
+    }
+    retry_usage = {
+        **base_usage,
+        "model": "openai:resolved-2",
+        "tokens": 9,
+        "usd": 0.002,
+        "input_tokens": 6,
+        "output_tokens": 3,
+        "estimated_usd": 0.002,
+        "observed_model": "openai:resolved-2",
+    }
+    vlm = _StubVLM([
+        ('{"text":"scratch","anomaly_seen":true}', base_usage),
+        (
+            '{"text":"표면에 선형 흔적이 보입니다.",'
+            '"anomaly_seen":true,"regions":["tl"],"features":["선형 흔적"]}',
+            retry_usage,
+        ),
+    ])
+
+    result = await vlm.observe(
+        str(image_path),
+        item="screw",
+        region="full",
+        style="observe",
+        flip=False,
+        reference_path=None,
+    )
+
+    assert result["tokens"] == 15
+    assert result["input_tokens"] == 10
+    assert result["output_tokens"] == 5
+    assert result["estimated_usd"] == 0.003
+    assert result["successful_provider_requests"] == 2
+    assert result["requested_model"] == "openai:requested"
+    assert result["observed_model"] == "openai:resolved-2"
+    assert result["model"] == "openai:resolved-2"
+
+
+@pytest.mark.asyncio
+async def test_ollama_vlm_does_not_invent_missing_response_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "message": {"content": '{"text":"이상이 보이지 않습니다."}'},
+        "prompt_eval_count": 8,
+        "eval_count": 2,
+    }
+    monkeypatch.setattr(
+        vision_backends.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _async_client_for(payload)(),
+    )
+
+    _, usage = await OllamaVLM("requested")._request("prompt", [])
+
+    assert usage["model"] is None
+    assert usage["observed_model"] is None
+    assert usage["requested_model"] == "ollama:requested"
+    assert usage["input_tokens"] == 8
+    assert usage["output_tokens"] == 2
+    assert usage["successful_provider_requests"] == 1
+
+
+@pytest.mark.asyncio
+async def test_openai_vlm_uses_response_model_and_provider_token_split(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = {
+        "model": "resolved-2026-10-21",
+        "choices": [{
+            "message": {"content": '{"text":"이상이 보이지 않습니다."}'},
+        }],
+        "usage": {
+            "prompt_tokens": 8,
+            "completion_tokens": 2,
+            "total_tokens": 10,
+        },
+    }
+    monkeypatch.setattr(
+        vision_backends.httpx,
+        "AsyncClient",
+        lambda **_kwargs: _async_client_for(payload)(),
+    )
+    vlm = OpenAIVLM("requested")
+    vlm.api_key = "test-key"
+
+    _, usage = await vlm._request("prompt", [])
+
+    assert usage["model"] == "openai:resolved-2026-10-21"
+    assert usage["observed_model"] == "openai:resolved-2026-10-21"
+    assert usage["requested_model"] == "openai:requested"
+    assert usage["input_tokens"] == 8
+    assert usage["output_tokens"] == 2
+    assert usage["tokens"] == 10
+    assert usage["successful_provider_requests"] == 1
 
 
 @pytest.mark.asyncio

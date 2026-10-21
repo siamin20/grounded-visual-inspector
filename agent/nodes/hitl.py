@@ -50,7 +50,12 @@ async def hitl_node(state: AgentState, deps: SupervisorDeps) -> dict:
     if hitl_mode != "interactive":
         events = event(state, "ApprovalRequired", required=True, report=report)
 
-    if hitl_mode == "interactive":
+    fresh_human_review = hitl_mode == "interactive" or (
+        hitl_mode == "auto_reject" and rejected >= 1
+    )
+    if fresh_human_review:
+        # auto_reject는 첫 초안의 반려만 자동화한다. 그 반려로 내용이
+        # 달라진 다음 초안은 실제 사람의 새 결정을 받아야 한다.
         resumed = interrupt({"type": "ApprovalRequired", "report": report})
         if not isinstance(resumed, dict) or resumed.get("decision") not in {
             "approve", "reject"
@@ -69,11 +74,7 @@ async def hitl_node(state: AgentState, deps: SupervisorDeps) -> dict:
             updates["hitl_rejections"] = 1
         return updates
 
-    if hitl_mode == "auto_approve" or (
-        hitl_mode == "auto_reject" and rejected >= 1
-    ):
-        # auto_reject는 재작성 경로를 한 번만 검증한다. 두 번째 초안도
-        # 별도의 승인 이벤트로 처리하며 과거 승인을 재사용하지 않는다.
+    if hitl_mode == "auto_approve":
         approval["decision"] = "approve"
         events.append({"type": "ApprovalResolved", "decision": "approve"})
     elif hitl_mode == "auto_reject":

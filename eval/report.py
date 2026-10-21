@@ -29,6 +29,7 @@ from eval.evaluators import (  # noqa: E402
     paired_macro_f1_test,
     type_metrics,
 )
+from eval.provenance import ProvenanceError, verify_run_manifest  # noqa: E402
 
 
 DEFAULT_RESULTS_DIR = ROOT / "eval" / "results"
@@ -114,6 +115,11 @@ def load_result_rows(results: str | Path) -> list[dict[str, Any]]:
                 raise ResultDataError(
                     f"JSONL 행이 개체가 아닙니다: {path}:{line_number}"
                 )
+            if row.get("dry_run") is True:
+                raise ResultDataError(
+                    f"dry-run 결과는 실측 보고서에 사용할 수 없습니다: "
+                    f"{path}:{line_number}"
+                )
             missing = [
                 key
                 for key in ("condition", "split")
@@ -137,6 +143,150 @@ def load_result_rows(results: str | Path) -> list[dict[str, Any]]:
             rows.append(row)
 
     return rows
+
+
+def _verified_result_files(
+    run_dir: Path,
+    *,
+    split: str,
+    conditions: Sequence[str],
+    dataset_path: str | Path,
+    type_map_path: str | Path,
+    repo_root: str | Path,
+) -> tuple[list[Path], bool, dict[str, dict[str, Any]]]:
+    """manifest가 결속한 결과와 최종 결론 금지 여부를 반환한다."""
+
+    if not run_dir.is_dir():
+        raise ResultDataError(
+            "provenance 검증 보고서의 --results는 run 디렉터리여야 합니다."
+        )
+    requested = list(conditions)
+    if not requested or any(
+        not isinstance(value, str) or not value or value != value.strip()
+        for value in requested
+    ):
+        raise ResultDataError("보고서 조건은 빈 값 없는 문자열 목록이어야 합니다.")
+    if len(requested) != len(set(requested)):
+        raise ResultDataError("보고서 조건을 중복해 지정할 수 없습니다.")
+
+    try:
+        manifest = verify_run_manifest(
+            run_dir,
+            reject_dry_run=True,
+            reject_fake=True,
+            require_complete=False,
+            validate_rows=True,
+            repo_root=repo_root,
+            verify_inputs=True,
+        )
+    except ProvenanceError as exc:
+        raise ResultDataError(f"실행 provenance 검증 실패: {exc}") from exc
+
+    if manifest.get("status") not in {"complete", "incomplete"}:
+        raise ResultDataError(
+            f"보고서를 만들 수 없는 suite 상태입니다: {manifest.get('status')}"
+        )
+    if manifest.get("split") != split:
+        raise ResultDataError(
+            f"manifest split과 보고서 split이 다릅니다: "
+            f"{manifest.get('split')} != {split}"
+        )
+
+    root = Path(repo_root)
+    artifacts = manifest["artifacts"]
+    for label, supplied, record in (
+        ("dataset", dataset_path, artifacts["dataset"]),
+        ("type_map", type_map_path, artifacts["type_map"]),
+    ):
+        try:
+            supplied_resolved = Path(supplied).resolve(strict=True)
+            recorded_resolved = (root / record["path"]).resolve(strict=True)
+        except OSError as exc:
+            raise ResultDataError(f"{label} 경로를 확인할 수 없습니다: {supplied}") from exc
+        if supplied_resolved != recorded_resolved:
+            raise ResultDataError(
+                f"보고서 {label}이 manifest에 결속된 파일과 다릅니다."
+            )
+
+    planned = manifest["planned_conditions"]
+    records = manifest["conditions"]
+    paths: list[Path] = []
+    setup_usages: dict[str, dict[str, Any]] = {}
+    provenance_incomplete = manifest.get("status") != "complete"
+    for condition in requested:
+        if condition not in planned:
+            raise ResultDataError(f"manifest에 사전 계획되지 않은 조건입니다: {condition}")
+        record = records.get(condition)
+        if not isinstance(record, Mapping) or record.get("status") not in {
+            "complete",
+            "incomplete",
+        }:
+            raise ResultDataError(f"결과가 결속되지 않은 조건입니다: {condition}")
+        if record.get("status") != "complete":
+            provenance_incomplete = True
+        result = record.get("result")
+        if not isinstance(result, Mapping) or not isinstance(result.get("path"), str):
+            raise ResultDataError(f"manifest에 결과 경로가 없습니다: {condition}")
+        paths.append(run_dir / result["path"])
+        setup = record.get("setup_usage")
+        if not isinstance(setup, Mapping):
+            raise ResultDataError(f"manifest에 초기화 usage가 없습니다: {condition}")
+        setup_usages[condition] = dict(setup)
+    return paths, provenance_incomplete, setup_usages
+
+
+def _cost_with_setup(
+    rows: Sequence[Mapping[str, Any]],
+    setup: Mapping[str, Any] | None,
+) -> dict[str, int | float | None]:
+    """조건 초기화 usage를 조건 총계와 표본당 평균에 상각한다."""
+    result = cost_latency(rows)
+    values = dict(setup or {})
+    count = len(rows)
+    setup_tokens = int(values.get("tokens", 0))
+    setup_cost = float(values.get("estimated_usd", 0.0))
+    setup_proxy = float(values.get("compute_proxy_usd", 0.0))
+    setup_requests = int(values.get("successful_provider_requests", 0))
+    unknown_usage_n = int(result.get("unknown_usage_n") or 0)
+    row_total_cost = float(result.get("known_estimated_usd_sum") or 0.0)
+    row_total_proxy = float(result.get("mean_compute_proxy_usd") or 0.0) * count
+    row_total_requests = (
+        float(result.get("mean_successful_provider_requests") or 0.0) * count
+    )
+    result["setup_latency_s"] = float(values.get("latency_s", 0.0))
+    result["setup_estimated_usd"] = setup_cost
+    result["total_estimated_usd"] = (
+        None if unknown_usage_n else row_total_cost + setup_cost
+    )
+    result["total_successful_provider_requests"] = int(
+        round(row_total_requests + setup_requests)
+    )
+    if count:
+        if not unknown_usage_n:
+            result["mean_tokens"] = (
+                float(result.get("mean_tokens") or 0.0) + setup_tokens / count
+            )
+            result["mean_usd"] = (row_total_cost + setup_cost) / count
+            result["mean_compute_proxy_usd"] = (
+                row_total_proxy + setup_proxy
+            ) / count
+        result["mean_successful_provider_requests"] = (
+            row_total_requests + setup_requests
+        ) / count
+        setup_mode = values.get("token_accounting", "total_only")
+        if setup_mode != "total_only":
+            if result.get("mean_input_tokens") is not None:
+                result["mean_input_tokens"] = float(
+                    result["mean_input_tokens"]
+                ) + int(values.get("input_tokens", 0)) / count
+            if result.get("mean_output_tokens") is not None:
+                result["mean_output_tokens"] = float(
+                    result["mean_output_tokens"]
+                ) + int(values.get("output_tokens", 0)) / count
+        elif setup_tokens or setup_requests:
+            result["mean_input_tokens"] = None
+            result["mean_output_tokens"] = None
+    return result
 
 
 def select_rows(
@@ -297,6 +447,8 @@ def render_report(
     conditions: Sequence[str],
     type_map: Mapping[str, Any],
     expected_rows: Sequence[Mapping[str, Any]],
+    provenance_incomplete: bool = False,
+    setup_usages: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> str:
     """조건별 지표, McNemar, 품목·비용 표를 하나의 마크다운으로 만든다."""
 
@@ -339,17 +491,25 @@ def render_report(
             ]
         )
 
+    conclusion_forbidden = bool(incomplete_conditions or provenance_incomplete)
+    incomplete_reasons: list[str] = []
+    if incomplete_conditions:
+        incomplete_reasons.append(f"행 누락: {', '.join(incomplete_conditions)}")
+    if provenance_incomplete:
+        incomplete_reasons.append("manifest 또는 조건 상태 incomplete")
+
     sections = [
         f"# 평가 결과 ({_escape(split)})",
         "",
         *(
             [
-                "> **결론 금지:** 사전 등록 표본을 모두 처리하지 않은 조건이 있습니다. "
-                f"({', '.join(incomplete_conditions)}) 누락은 보수적 오답으로 집계했지만, "
+                "> **결론 금지:** 평가 캡처가 완결되지 않았습니다. "
+                f"({'; '.join(incomplete_reasons)}) "
+                "누락은 보수적 오답으로 집계했지만, "
                 "이 보고서로 성능 결론을 내리면 안 됩니다.",
                 "",
             ]
-            if incomplete_conditions
+            if conclusion_forbidden
             else []
         ),
         "## 조건별 지표",
@@ -383,6 +543,11 @@ def render_report(
             ],
             metric_rows,
         ),
+        "",
+        "> `citation_fidelity`는 저장된 VLM 관찰 기록과 생성 보고서 관찰문 "
+        "사이의 8자 n-gram 인용 일치도다. 실제 이미지·픽셀 진실성이나 "
+        "VLM 환각률을 측정하지 않으며, H3는 별도 20쌍 사람 블라인드 "
+        "채점으로 판정한다.",
     ]
 
     # H1/H2의 주 검정은 목표 지표 자체를 같은 ID 안에서 교환한다.
@@ -393,20 +558,23 @@ def render_report(
         a_rows = list(grouped["A"])
         b0_complete = binary_metrics(b0_rows, expected_rows)["observed_n"] == len(expected_rows)
         a_complete = binary_metrics(a_rows, expected_rows)["observed_n"] == len(expected_rows)
-        paired_complete = bool(b0_complete and a_complete)
+        paired_rows_complete = bool(b0_complete and a_complete)
         h1 = paired_balanced_accuracy_test(b0_rows, a_rows, expected_rows)
         h2 = paired_macro_f1_test(b0_rows, a_rows, type_map, expected_rows)
         for hypothesis, values in (("H1", h1), ("H2", h2)):
             supported = (
-                paired_complete
+                paired_rows_complete
+                and not provenance_incomplete
                 and float(values["delta"]) > 0.0
                 and float(values["p_value"]) < 0.05
             )
             decision = (
                 "보류(dev 탐색)"
                 if split != "heldout"
+                else "보류(불완전 provenance)"
+                if provenance_incomplete
                 else "보류(불완전 캡처)"
-                if not paired_complete
+                if not paired_rows_complete
                 else "지지" if supported else "효과 미입증"
             )
             hypothesis_rows.append([
@@ -459,6 +627,8 @@ def render_report(
         )
         if split != "heldout":
             h4_decision = "보류(dev 탐색)"
+        elif provenance_incomplete:
+            h4_decision = "보류(불완전 provenance)"
         elif a_binary["observed_n"] != a_binary["expected_n"]:
             h4_decision = "보류(불완전 캡처)"
         elif not groups_large_enough:
@@ -635,7 +805,10 @@ def render_report(
     for condition in conditions:
         rows = list(grouped[condition])
         binary = binary_metrics(rows, expected_rows)
-        cost = cost_latency(rows)
+        cost = _cost_with_setup(
+            rows,
+            (setup_usages or {}).get(condition),
+        )
         cost_rows.append(
             [
                 condition,
@@ -649,10 +822,22 @@ def render_report(
                 "완료" if binary["observed_n"] == binary["expected_n"] else "부분",
                 _number(cost.get("latency_p50_s")),
                 _number(cost.get("latency_p95_s")),
+                _number(cost.get("setup_latency_s")),
                 _number(cost.get("mean_tokens"), 1),
+                _number(cost.get("mean_input_tokens"), 1),
+                _number(cost.get("mean_output_tokens"), 1),
                 _number(cost.get("mean_usd"), 6),
+                _number(cost.get("total_estimated_usd"), 6),
+                _number(cost.get("mean_compute_proxy_usd"), 6),
+                _integer(cost.get("unknown_usage_n")),
                 _number(cost.get("hitl_rate")),
                 _number(cost.get("mean_validation_attempts"), 2),
+                _number(cost.get("mean_validation_rejections"), 2),
+                _number(cost.get("mean_retry_count"), 2),
+                _number(cost.get("mean_replan_rounds"), 2),
+                _number(cost.get("mean_successful_provider_requests"), 2),
+                _integer(cost.get("total_successful_provider_requests")),
+                _number(cost.get("mean_successful_vlm_requests"), 2),
             ]
         )
     sections.extend(
@@ -664,10 +849,25 @@ def render_report(
                 [
                     "조건", "사전등록 N", "실제 행 N", "누락", "오류", "무효", "ABSTAIN",
                     "자동판정 N", "캡처 상태", "지연 p50(s)", "지연 p95(s)",
-                    "평균 tokens", "평균 USD", "HITL 비율", "평균 validation 횟수",
+                    "조건 초기화 지연(s)",
+                    "평균 tokens", "평균 input tokens", "평균 output tokens",
+                    "평균 estimated USD", "조건 총 estimated USD",
+                    "평균 compute proxy USD", "usage 미지 N", "HITL 비율",
+                    "평균 validation 횟수", "평균 validation 반려",
+                    "평균 retry", "평균 replan", "평균 성공 provider 응답",
+                    "조건 총 성공 provider 응답",
+                    "평균 성공 VLM 응답",
                 ],
                 cost_rows,
             ),
+            "",
+            "> 배치 평가는 `auto_approve`로 실행한다. HITL 비율은 승인 필요 사례의 "
+            "발생률이며, 사람 판단으로 정확도가 개선됐다는 지표가 아니다.",
+            "",
+            "> `성공 provider 응답`은 usage를 반환한 성공 응답 수이며, "
+            "실패·타임아웃을 포함한 총 API 시도 횟수가 아니다. 조건 초기화의 "
+            "기준서 색인 usage는 manifest와 summary에 별도 결속하고, "
+            "평균 비용·토큰·성공 응답에는 실제 처리 행 수로 상각한다.",
         ]
     )
     return "\n".join(sections).rstrip() + "\n"
@@ -680,11 +880,30 @@ def write_report(
     conditions: Sequence[str],
     type_map_path: str | Path = DEFAULT_TYPE_MAP,
     dataset_path: str | Path = DEFAULT_DATASET,
+    verify_provenance: bool = True,
+    repo_root: str | Path = ROOT,
 ) -> tuple[str, Path]:
-    """마크다운 정리를 만들고 ``summary_{split}.md``로 저장한다."""
+    """마크다운 정리를 만들고 ``summary_{split}.md``로 저장한다.
+
+    기본값은 run manifest·해시·행 결속·입력 해시를 모두 검증한다.
+    ``verify_provenance=False``는 합성 fixture를 사용하는 저수준 단위 테스트용이다.
+    """
 
     results_path = Path(results)
-    rows = load_result_rows(results_path)
+    provenance_incomplete = False
+    setup_usages: dict[str, dict[str, Any]] = {}
+    if verify_provenance:
+        result_files, provenance_incomplete, setup_usages = _verified_result_files(
+            results_path,
+            split=split,
+            conditions=conditions,
+            dataset_path=dataset_path,
+            type_map_path=type_map_path,
+            repo_root=repo_root,
+        )
+        rows = [row for path in result_files for row in load_result_rows(path)]
+    else:
+        rows = load_result_rows(results_path)
     expected_rows = load_expected_rows(dataset_path, split=split)
     _reject_wrong_split_for_expected_ids(
         rows,
@@ -700,6 +919,8 @@ def write_report(
             conditions=conditions,
             type_map=load_type_map(type_map_path),
             expected_rows=expected_rows,
+            provenance_incomplete=provenance_incomplete,
+            setup_usages=setup_usages,
         )
     except EvaluationDataError as exc:
         raise ResultDataError(f"결과와 dataset의 무결성 검증 실패: {exc}") from exc
@@ -730,6 +951,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             conditions=conditions,
             type_map_path=args.type_map,
             dataset_path=args.dataset,
+            verify_provenance=True,
         )
     except ResultDataError as exc:
         parser.error(str(exc))

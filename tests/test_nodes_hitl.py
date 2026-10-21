@@ -110,15 +110,37 @@ async def test_hitl_automatic_modes_resolve_without_interrupt(
     if mode == "auto_reject":
         assert result["hitl_rejections"] == 1
         assert "사람이 반려" in result["validation_feedback"]
-        state.update(result)
-        rewritten = await hitl_node(state, SimpleNamespace(hitl_mode=mode))
-        assert rewritten["approval"]["decision"] == "approve"
-        assert [event["type"] for event in rewritten["events"][-2:]] == [
-            "ApprovalRequired",
-            "ApprovalResolved",
-        ]
     else:
         assert "hitl_rejections" not in result
+
+
+@pytest.mark.asyncio
+async def test_auto_reject_rewritten_draft_interrupts_for_fresh_human_review(
+    inspection_state: dict,
+) -> None:
+    state = deepcopy(inspection_state)
+    state["report"].update(
+        verdict="ABSTAIN",
+        confidence="low",
+        actions=["재검사"],
+    )
+    state["hitl_rejections"] = 1
+    builder = StateGraph(AgentState)
+    builder.add_node(
+        "hitl",
+        partial(hitl_node, deps=SimpleNamespace(hitl_mode="auto_reject")),
+    )
+    builder.add_edge(START, "hitl")
+    graph = builder.compile(checkpointer=InMemorySaver())
+    config = {"configurable": {"thread_id": f"auto-reject-{uuid4()}"}}
+
+    paused = await graph.ainvoke(state, config=config)
+
+    assert len(paused["__interrupt__"]) == 1
+    assert paused["__interrupt__"][0].value == {
+        "type": "ApprovalRequired",
+        "report": state["report"],
+    }
 
 
 @pytest.mark.asyncio

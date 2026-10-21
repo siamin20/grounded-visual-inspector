@@ -10,6 +10,7 @@ from langsmith import traceable
 from agent.retry import with_retry
 from agent.state import AgentState
 from agent.vision.crop import unflip_regions
+from agent.nodes.common import _merge_usages, _vlm_result_usage
 
 
 def _cross_task_indices(state: AgentState, *, pending_only: bool) -> list[int]:
@@ -33,6 +34,8 @@ def _empty_result(*, replace: bool = False, skipped: bool = False,
             "elapsed": 0.0,
             "tokens": 0,
             "usd": 0.0,
+            "usage": None,
+            "successful_provider_requests": 0,
             "done_task_indices": done_task_indices or [],
         }
     }
@@ -78,7 +81,7 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
         "anomaly_seen": result.get("anomaly_seen"),
         "regions": restored_regions,
         "summary": str(result.get("text", "")),
-        "model": str(result.get("model", "")),
+        "model": result.get("model") if isinstance(result.get("model"), str) else None,
     }
     done_event = {
         "type": "CrossCheckDone",
@@ -87,6 +90,7 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
         "anomaly_seen": cross_check["anomaly_seen"],
         "regions": restored_regions,
     }
+    usage = _merge_usages(_vlm_result_usage(result))
     return {
         "_cross_result": {
             "cross_check": cross_check,
@@ -94,8 +98,12 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
             "events": [done_event],
             "retries": int(retries),
             "elapsed": elapsed,
-            "tokens": int(result.get("tokens", 0)),
-            "usd": float(result.get("usd", 0.0)),
+            "tokens": int(usage.get("tokens", 0)),
+            "usd": float(usage.get("usd", 0.0)),
+            "usage": usage,
+            "successful_provider_requests": int(
+                usage.get("successful_provider_requests", 0)
+            ),
             "done_task_indices": pending,
         }
     }

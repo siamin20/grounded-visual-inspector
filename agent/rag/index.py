@@ -79,10 +79,12 @@ class SpecIndex:
     def search(self, query: str, item: str, k: int = 3) -> list[dict[str, Any]]:
         """품목을 먼저 필터한 다음 cosine 상위 ``k``개 조항을 반환다."""
         if k <= 0:
+            self.embedder.embed([])
             return []
         indices = [index for index, clause in enumerate(self.clauses)
                    if clause["item"] == item]
         if not indices:
+            self.embedder.embed([])
             return []
 
         query_matrix = np.asarray(self.embedder.embed([query]), dtype=np.float32)

@@ -15,6 +15,8 @@ from typing import Protocol
 import httpx
 import numpy as np
 
+from agent.usage import MISSING, nonnegative_int
+
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
 DEFAULT_OPENAI_URL = "https://api.openai.com/v1/embeddings"
@@ -30,7 +32,38 @@ class Embedder(Protocol):
 
 
 def _empty_usage(model: str) -> dict:
-    return {"model": model, "tokens": 0, "usd": 0.0}
+    """외부 호출이 없음을 usage에 명시한다."""
+    is_fake = model.startswith("fake:")
+    return {
+        "model": model,
+        "tokens": 0,
+        "usd": 0.0,
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "token_accounting": "estimated_split" if is_fake else "provider_split",
+        "estimated_usd": 0.0,
+        "compute_proxy_usd": 0.0,
+        "requested_model": model,
+        "observed_model": model if is_fake else None,
+        "successful_provider_requests": 0,
+        "unknown_token_usage_successes": 0,
+        "observed_model_response_count": 0,
+        "unobserved_model_successes": 0,
+    }
+
+
+def _usage_count(container: object, key: str, *, default: object = MISSING) -> int:
+    """누락값과 잘못된 값을 구분하고 잘못된 수치는 허용하지 않는다."""
+    if not isinstance(container, dict) or key not in container:
+        return nonnegative_int(default, name=key)
+    return nonnegative_int(container[key], name=key)
+
+
+def _observed_model(prefix: str, value: object) -> str | None:
+    """관측 모델명은 실제 옹답 필드에서만 가져온다."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    return f"{prefix}:{value.strip()}"
 
 
 def _as_matrix(values: object, expected_rows: int) -> np.ndarray:
@@ -84,6 +117,17 @@ class FakeEmbedder:
             "model": self.name,
             "tokens": tokens,
             "usd": 0.0,
+            "input_tokens": tokens,
+            "output_tokens": 0,
+            "token_accounting": "estimated_split",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": self.name,
+            "successful_provider_requests": 0,
+            "unknown_token_usage_successes": 0,
+            "observed_model_response_count": 0,
+            "unobserved_model_successes": 0,
         }
         return matrix
 
@@ -91,11 +135,17 @@ class FakeEmbedder:
 class OllamaEmbedder:
     """Ollama ``/api/embed`` 엔드포인틀 사용하는 임베딩."""
 
-    def __init__(self, model: str | None = None, base_url: str | None = None) -> None:
+    def __init__(
+        self,
+        model: str | None = None,
+        base_url: str | None = None,
+        compute_proxy_usd_per_1k: float = 0.00002,
+    ) -> None:
         self.model = model or os.environ.get("EMBED_MODEL", "nomic-embed-text")
         self.name = f"ollama:{self.model}"
         root = base_url or os.environ.get("OLLAMA_URL", DEFAULT_OLLAMA_URL)
         self.url = root.rstrip("/") + "/api/embed"
+        self.compute_proxy_usd_per_1k = compute_proxy_usd_per_1k
         self.last_usage = _empty_usage(self.name)
 
     def embed(self, texts: list[str]) -> np.ndarray:
@@ -109,9 +159,40 @@ class OllamaEmbedder:
         )
         response.raise_for_status()
         data = response.json()
+        token_usage_known = False
+        if isinstance(data, dict) and "prompt_eval_count" in data:
+            tokens = _usage_count(data, "prompt_eval_count")
+            token_usage_known = True
+        else:
+            raw_usage = data.get("usage") if isinstance(data, dict) else None
+            if isinstance(raw_usage, dict) and "total_tokens" in raw_usage:
+                tokens = _usage_count(raw_usage, "total_tokens")
+                token_usage_known = True
+            else:
+                tokens = 0
+        observed_model = _observed_model("ollama", data.get("model"))
+        compute_proxy_usd = round(
+            tokens / 1000 * self.compute_proxy_usd_per_1k, 6
+        )
+        self.last_usage = {
+            "model": self.name,
+            "tokens": tokens,
+            "usd": 0.0,
+            "input_tokens": tokens if token_usage_known else None,
+            "output_tokens": 0 if token_usage_known else None,
+            "token_accounting": "provider_split" if token_usage_known else "total_only",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": compute_proxy_usd,
+            "requested_model": self.name,
+            "observed_model": observed_model,
+            "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0 if token_usage_known else 1,
+            "observed_model_response_count": 1 if observed_model else 0,
+            "unobserved_model_successes": 0 if observed_model else 1,
+        }
+        # provider 성공 응답의 usage는 vector shape 검증이 실패해도
+        # 눈에서 사라지지 않도록 먼저 고정한다.
         matrix = _as_matrix(data.get("embeddings"), len(texts))
-        tokens = int(data.get("prompt_eval_count") or data.get("usage", {}).get("total_tokens") or 0)
-        self.last_usage = {"model": self.name, "tokens": tokens, "usd": 0.0}
         return matrix
 
 
@@ -150,14 +231,37 @@ class OpenAIEmbedder:
         )
         response.raise_for_status()
         data = response.json()
-        ordered = sorted(data.get("data", []), key=lambda row: row.get("index", 0))
-        matrix = _as_matrix([row.get("embedding") for row in ordered], len(texts))
-        tokens = int(data.get("usage", {}).get("total_tokens") or 0)
+        raw_usage = data.get("usage") if isinstance(data, dict) else None
+        token_usage_known = False
+        if isinstance(raw_usage, dict) and "prompt_tokens" in raw_usage:
+            tokens = _usage_count(raw_usage, "prompt_tokens")
+            token_usage_known = True
+        elif isinstance(raw_usage, dict) and "total_tokens" in raw_usage:
+            tokens = _usage_count(raw_usage, "total_tokens")
+            token_usage_known = True
+        else:
+            tokens = 0
+        estimated_usd = round(tokens / 1000 * self.usd_per_1k, 6)
+        observed_model = _observed_model("openai", data.get("model"))
         self.last_usage = {
             "model": self.name,
             "tokens": tokens,
-            "usd": round(tokens / 1000 * self.usd_per_1k, 6),
+            "usd": estimated_usd,
+            "input_tokens": tokens if token_usage_known else None,
+            "output_tokens": 0 if token_usage_known else None,
+            "token_accounting": "provider_split" if token_usage_known else "total_only",
+            "estimated_usd": estimated_usd,
+            "compute_proxy_usd": 0.0,
+            "requested_model": self.name,
+            "observed_model": observed_model,
+            "successful_provider_requests": 1,
+            "unknown_token_usage_successes": 0 if token_usage_known else 1,
+            "observed_model_response_count": 1 if observed_model else 0,
+            "unobserved_model_successes": 0 if observed_model else 1,
         }
+        # usage 영수증을 남긴 뒤 벡터 크기를 검증한다.
+        ordered = sorted(data.get("data", []), key=lambda row: row.get("index", 0))
+        matrix = _as_matrix([row.get("embedding") for row in ordered], len(texts))
         return matrix
 
 

@@ -7,7 +7,7 @@ from langsmith import traceable
 from agent.deps import SupervisorDeps
 from agent.state import AgentState
 
-from .common import _cost, _tokens, event, load_lot
+from .common import _usage_updates, event, load_lot
 
 
 @traceable(name="plan_node")
@@ -29,7 +29,6 @@ async def plan_node(state: AgentState, deps: SupervisorDeps) -> dict:
         "ablation": ablation,
         "tasks": tasks,
         "needs_analysis": False,
-        "cost_usd": _cost(state, usage),
-        "tokens": _tokens(state, usage),
+        **_usage_updates(state, usage),
         "events": event(state, "PlanCreated", task_count=len(tasks)),
     }

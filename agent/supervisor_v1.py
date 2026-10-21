@@ -12,7 +12,7 @@ from langsmith import traceable
 
 from .deps import SupervisorDeps, validate_hitl_mode
 from .guide_actions import load_guide_actions, resolve_reject_actions
-from .nodes.common import event, load_lot
+from .nodes.common import _usage_updates, _vlm_result_usage, event, load_lot
 from .nodes.hitl import hitl_node
 from .nodes.report_contract import deterministic_summary
 from .readability import is_unreadable_text
@@ -166,6 +166,7 @@ async def _prepare_v1(
     type_map = load_type_map()
     if not image_path:
         reply, usage = await deps.fast_llm.chat(message, history)
+        usage_updates = _usage_updates({}, usage)
         return {
             "final": reply,
             "route": "chat",
@@ -173,8 +174,8 @@ async def _prepare_v1(
                 {"type": "RouteDecided", "route": "chat"},
                 {"type": "Finalize", "pipeline": "baseline-v1"},
             ],
-            "cost_usd": usage.get("usd", 0.0),
-            "tokens": int(usage.get("tokens", 0)),
+            **usage_updates,
+            "successful_vlm_requests": 0,
             "validation_attempts": 0,
             "replan_rounds": 0,
             "gate_removed": 0,
@@ -191,6 +192,17 @@ async def _prepare_v1(
             ],
             "cost_usd": 0.0,
             "tokens": 0,
+            "input_tokens": None,
+            "output_tokens": None,
+            "token_accounting": "total_only",
+            "estimated_usd": 0.0,
+            "compute_proxy_usd": 0.0,
+            "observed_model_ids": [],
+            "successful_provider_requests": 0,
+            "successful_vlm_requests": 0,
+            "unknown_token_usage_successes": 0,
+            "unobserved_model_successes": 0,
+            "observed_model_response_count": 0,
             "validation_attempts": 0,
             "replan_rounds": 0,
             "gate_removed": 0,
@@ -279,6 +291,7 @@ async def _prepare_v1(
         },
         {"type": "DraftWritten", "attempt": 1},
     ]
+    usage_updates = _usage_updates({}, _vlm_result_usage(result))
     return {
         "final": "",
         "route": "inspection",
@@ -291,8 +304,10 @@ async def _prepare_v1(
         "abstain_reason": abstain_reason,
         "observations": report["observations"],
         "approval": {},
-        "cost_usd": float(result.get("usd", 0.0)),
-        "tokens": int(result.get("tokens", 0)),
+        **usage_updates,
+        "successful_vlm_requests": int(
+            usage_updates["successful_provider_requests"]
+        ),
         "validation_attempts": 0,
         "replan_rounds": 0,
         "gate_removed": 0,
@@ -488,7 +503,7 @@ async def run_v1(
             result.update(_rejected_v1_updates(result))
             result["approval"] = {
                 "required": True,
-                "decision": "approve",
+                "decision": None,
                 "note": "",
             }
             result["events"] = [
@@ -499,13 +514,11 @@ async def run_v1(
                     "report": result.get("report") or {},
                     "pipeline": "baseline-v1",
                 },
-                {
-                    "type": "ApprovalResolved",
-                    "decision": "approve",
-                    "pipeline": "baseline-v1",
-                },
             ]
-            decision = "approve"
+            # 직접 실행에는 interrupt 재개 통로가 없다. 변경된 보고서를
+            # 자동 승인하지 않고 호출자에게 새 사람 승인이 필요함을 남긴다.
+            result["paused"] = True
+            return result
     result["approval"] = {
         "required": required,
         "decision": decision,

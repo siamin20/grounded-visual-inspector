@@ -34,8 +34,8 @@ def _attr(obj, *names):
     """mcp SDK 버전에 따라 pydantic 필드명이 camelCase(예: resourceTemplates,
     uriTemplate, 구버전 1.x)와 snake_case(예: resource_templates, uri_template,
     신버전 2.x)로 갈린다 — 이 프로젝트 안에도 시스템 python3(mcp 1.28.1, camelCase)와
-    .venv(mcp 2.2.0, snake_case)가 섞여 있어 실행 환경마다 바뀐다. 둘 다 시도해서
-    설치된 버전과 무관하게 동작하게 한다."""
+    .venv(mcp 2.2.0, snake_case)가 섞여 있어 실행 환경마다 바뀐다. 신버전 필드를 먼저
+    시도하고 구버전 필드로 대체해 호환 경고 없이 동작하게 한다."""
     for name in names:
         if hasattr(obj, name):
             return getattr(obj, name)
@@ -100,7 +100,7 @@ class MCPClient:
     async def list_resource_templates(self, server: str) -> list:
         async with self._lock:
             result = await self.sessions[server].list_resource_templates()
-        return _attr(result, "resourceTemplates", "resource_templates")
+        return _attr(result, "resource_templates", "resourceTemplates")
 
     @traceable(run_type="tool", name="mcp.find_resource_template")
     async def find_resource_template(self, template_name: str) -> tuple[str, str]:
@@ -109,7 +109,7 @@ class MCPClient:
             templates = await self.list_resource_templates(server_name)
             matched = next((t for t in templates if t.name == template_name), None)
             if matched is not None:
-                return server_name, _attr(matched, "uriTemplate", "uri_template")
+                return server_name, _attr(matched, "uri_template", "uriTemplate")
         raise ValueError(
             f"MCP resource template not found on any connected server: {template_name}")
 

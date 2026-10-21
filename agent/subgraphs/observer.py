@@ -12,6 +12,7 @@ from langsmith import traceable
 
 from agent.retry import with_retry
 from agent.state import AgentState
+from agent.nodes.common import _merge_usages, _vlm_result_usage
 
 
 _ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -82,6 +83,8 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
                 "elapsed": 0.0,
                 "tokens": 0,
                 "usd": 0.0,
+                "usage": None,
+                "successful_provider_requests": 0,
                 "done_task_indices": [],
             }
         }
@@ -113,8 +116,6 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
     observations: list[dict] = []
     events: list[dict] = []
     retry_count = 0
-    tokens = 0
-    usd = 0.0
     for call in calls:
         region = call["region"]
         result = call["result"]
@@ -126,7 +127,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
             "anomaly_seen": result.get("anomaly_seen"),
             "regions": list(result.get("regions") or []),
             "features": list(result.get("features") or []),
-            "model": str(result.get("model", "")),
+            "model": result.get("model") if isinstance(result.get("model"), str) else None,
         }
         observations.append(observation)
         ready_event = {
@@ -140,8 +141,9 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
             ready_event["filtered_words"] = filtered_words
         events.append(ready_event)
         retry_count += int(call["retries"])
-        tokens += int(result.get("tokens", 0))
-        usd += float(result.get("usd", 0.0))
+    merged_usage = _merge_usages(*(
+        _vlm_result_usage(call["result"]) for call in calls
+    ))
 
     return {
         "_observer_result": {
@@ -149,8 +151,12 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
             "events": events,
             "retries": retry_count,
             "elapsed": elapsed,
-            "tokens": tokens,
-            "usd": usd,
+            "tokens": int(merged_usage.get("tokens", 0)),
+            "usd": float(merged_usage.get("usd", 0.0)),
+            "usage": merged_usage,
+            "successful_provider_requests": int(
+                merged_usage.get("successful_provider_requests", 0)
+            ),
             "done_task_indices": task_indices,
         }
     }

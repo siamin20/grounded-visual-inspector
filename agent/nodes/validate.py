@@ -337,10 +337,13 @@ async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
             "validation_errors": [],
             "validation_feedback": None,
             "validation_passed": True,
+            "validation_terminal": True,
             "events": event(
                 state,
                 "Validation",
                 verdict="accepted",
+                passed=True,
+                skipped=True,
                 errors=[],
                 would_fail=errors,
             ),
@@ -352,8 +355,14 @@ async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
             "validation_errors": errors,
             "validation_feedback": "; ".join(errors),
             "validation_passed": False,
+            "validation_terminal": False,
             "events": event(
-                state, "Validation", verdict="rejected", errors=errors
+                state,
+                "Validation",
+                verdict="rejected",
+                passed=False,
+                skipped=False,
+                errors=errors,
             ),
         }
     if errors:
@@ -368,14 +377,30 @@ async def validate_node(state: AgentState, deps: SupervisorDeps) -> dict:
             "approval": {"required": True, "decision": None, "note": ""},
             "validation_errors": errors,
             "validation_feedback": None,
-            "validation_passed": True,
+            # 재작성 상한 도달은 루프 종료이지 검증 성공이 아니다.
+            "validation_passed": False,
+            "validation_terminal": True,
             "events": event(
-                state, "Validation", verdict="abstained", errors=errors
+                state,
+                "Validation",
+                verdict="abstained",
+                passed=False,
+                skipped=False,
+                terminal=True,
+                errors=errors,
             ),
         }
     return {
         "validation_errors": [],
         "validation_feedback": None,
         "validation_passed": True,
-        "events": event(state, "Validation", verdict="accepted", errors=[]),
+        "validation_terminal": True,
+        "events": event(
+            state,
+            "Validation",
+            verdict="accepted",
+            passed=True,
+            skipped=False,
+            errors=[],
+        ),
     }
