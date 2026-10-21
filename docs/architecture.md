@@ -1,206 +1,195 @@
-# 아키텍처와 흐름도
+# 시스템 구조와 검사 흐름
 
-설계 본문은 [design.md](design.md). 이 문서는 그림만 모은다. GitHub 에서 mermaid 로 렌더된다.
+세부 설계의 단일 기준은 [design.md](design.md)다. 이 문서는 전체 흐름을
+먼저 보여 준 뒤, 구현 구조·상세 처리·담당자 승인·평가 흐름을 나누어
+설명한다. 그림에서는 읽기 쉬운 역할명을 먼저 쓰고, 코드의 노드명은
+표에서 함께 밝힌다.
 
-## 1. 전체 구성도
+## 1. 검사 과정 한눈에 보기
+
+이 그림은 사용자가 경험하는 핵심 흐름만 보여 준다. 서버, MCP, 데이터베이스,
+평가 도구는 아래 절로 분리했다.
 
 ```mermaid
 flowchart TB
-    Browser["브라우저 (web_chat.html, Vue 3)<br/>품목 선택 · 이미지 업로드 · 승인/반려"] -->|"same-origin"| Proxy["web_demo_server.py (:8600)<br/>/inspect · /chat/stream · /chat/resume 프록시"]
-    Proxy --> API
-    Curl["curl / eval/run_eval.py"] --> API
-
-    subgraph Server["server.py — FastAPI (:8100)"]
-        API["/health · /chat · /chat/stream<br/>/inspect (multipart) · /chat/resume"]
-        Lifespan["lifespan 싱글턴<br/>SupervisorDeps 1회 생성"]
-    end
-
-    API --> Graph
-
-    subgraph Graph["agent/graph.py — LangGraph StateGraph (v2)"]
-        direction TB
-        Route["route"] -->|chat| Chat["chat_answer"]
-        Route -->|inspection| Plan["plan"] --> Gate["gate"] --> Research
-        subgraph Research["research 서브그래프 (compiled)"]
-            direction TB
-            Obs["Observer<br/>full + 4크롭 병렬"]
-            CC["Cross-Checker<br/>좌우반전 · 체크리스트 · 다른 모델"]
-            SJ["Spec-Judge<br/>기준서 RAG → 위반 조항"]
-            Obs --> SJ
-            CC --> SJ
-        end
-        Research --> Replan["replan_check"]
-        Replan -->|부족| Research
-        Replan -->|충분| Analysis["analysis<br/>(코드 규칙 합의)"]
-        Analysis --> Write["write<br/>보고서 JSON"]
-        Write --> HITL["hitl<br/>interrupt()"]
-        HITL --> Validate["validate<br/>(코드 규칙 4개)"]
-        Validate -->|불합격 ≤2회| Write
-        Validate -->|합격| Finalize["finalize"]
-    end
-
-    API -. "SUPERVISOR_VERSION=v1" .-> V1["agent/supervisor_v1.py<br/>Before 기준선 B0/B1 (VLM 1회)"]
-
-    Plan -. "find_prompt → inspection_prompt" .-> MCP
-    Obs -. "find_tool → inspect_image ×5" .-> MCP
-    CC -. "inspect_image (flip, checklist)" .-> MCP
-    Write -. "guide://{defect_type}" .-> MCP
-    SJ --> VS["SpecIndex (numpy cosine)<br/>data/specs 조항 단위"]
-
-    subgraph MCP["agent/mcp_client.py — 다중 MCP 세션 (stdio subprocess)"]
-        subgraph Vision["mcp_server_vision.py (server=vision)"]
-            Tool["Tool: inspect_image"]
-            Res1["Resource: spec://{item}"]
-            Res2["Resource: guide://{defect_type}"]
-            Prompt["Prompt: inspection_prompt"]
-        end
-        subgraph Docs["mcp_server_docs.py (server=docs, decoy)"]
-            DocsRes["Resource: docs://api-reference/{section}"]
-        end
-    end
-
-    Tool --> VLM["agent/vision/backends.py<br/>fake · ollama(qwen2.5vl) · openai(gpt-4o-mini / gpt-4o)"]
-
-    Lifespan --> Deps["SupervisorDeps<br/>fast_llm · quality_llm · mcp · session_store<br/>vector_store · hitl_mode · ablation"]
-    Deps --> LLM["텍스트 LLM<br/>fake · ollama · openai"]
-    Deps --> Session["session.db (대화 이력)"]
-    Graph --> Ckpt["checkpoints.db<br/>LangGraph SqliteSaver (HITL 재개)"]
-    Graph --> LS["LangSmith<br/>계층 trace · Dataset 평가"]
+    Input["이미지와 품목 입력"] --> Inspect["이미지에서 외관 확인"]
+    Inspect --> Criteria["검사 기준과 대조"]
+    Criteria --> Decide["규칙에 따라 종합 판정"]
+    Decide --> Report["근거를 담은 검사 보고서 작성"]
+    Report --> NeedHuman{"담당자 확인이<br/>필요한가?"}
+    NeedHuman -->|"예"| Human["승인 또는 반려"]
+    NeedHuman -->|"아니오"| Verify["보고서 근거·형식 검증"]
+    Human -->|"승인"| Verify
+    Human -->|"반려"| Report
+    Verify -->|"통과"| Result["최종 결과<br/>PASS · REJECT · ABSTAIN"]
+    Verify -->|"수정 필요"| Report
 ```
 
-핵심 원칙 네 가지가 그림에 드러나야 한다.
-- VLM 은 MCP tool 뒤에만 있다. 그래프 노드는 VLM 을 직접 모른다.
-- research 는 2단계다. Observer 와 Cross-Checker 가 병렬, Spec-Judge 는 Observer 의 관찰문을 받아 뒤에 돈다.
-- gate · analysis · validate 는 LLM 을 부르지 않는다.
-- Before(v1)와 After(v2)는 같은 서버에서 환경변수 하나로 갈린다.
+- 담당자 승인은 매번 요구하지 않는다. 확신도가 낮거나, 판정을 낼 수 없거나,
+  폐기·라인 정지처럼 위험도가 높은 조치가 있을 때만 멈춘다.
+- 이미지에서 충분한 정보를 얻지 못하면 중앙 영역을 한 번 더 확인한다.
+  이 세부 분기는 전체 흐름을 읽기 쉽게 하기 위해 첫 그림에서 생략했다.
 
-## 2. 그래프 상태 흐름 (무엇이 어느 노드에서 채워지는가)
+## 2. 구성요소와 책임
 
 ```mermaid
-flowchart LR
-    I["입력<br/>image_path · item · query"] --> R["route<br/>route"]
-    R --> P["plan<br/>tasks[observe, cross_check, spec_judge]"]
-    P --> G["gate<br/>tasks(검증됨) · gate_removed"]
-    G --> O["Observer<br/>observations[5]"]
-    G --> C["Cross-Checker<br/>cross_check"]
-    O --> S["Spec-Judge<br/>spec_hits[≤3] · judgement"]
-    C --> S
-    S --> A["analysis<br/>verdict · confidence · defect_type"]
-    A --> W["write<br/>report · draft"]
-    W --> H["hitl<br/>approval{required, decision}"]
-    H --> V["validate<br/>validation_errors · validation_feedback"]
-    V --> F["finalize<br/>final (markdown)"]
+flowchart TB
+    Web["웹 화면<br/>Vue 3"] --> API["검사 API<br/>FastAPI"]
+    API --> Graph["검사 워크플로<br/>LangGraph v2"]
+    Graph --> MCP["이미지·문서 도구<br/>MCP"]
+    MCP --> VLM["이미지 모델<br/>fake · Ollama · OpenAI"]
+    Graph --> Specs["검사 기준 검색<br/>SpecIndex"]
+    API --> Session["대화 기록<br/>session.db"]
+    Graph --> Checkpoint["승인 대기 상태<br/>checkpoints.db"]
+    Eval["평가 실행기<br/>eval/run_eval.py"] -. "서버를 거치지 않음" .-> Graph
+    Eval -.-> Baseline["비교 기준<br/>v1 · B0/B1"]
 ```
 
-## 3. 시퀀스 — 검사 요청 (정상 흐름, HITL 불필요)
+| 구성요소 | 하는 일 | 구현 |
+|---|---|---|
+| 웹 화면 | 품목·이미지 입력, 검사 과정 표시, 승인·반려 | `web_chat.html`, `web_demo_server.py` (`:8600`) |
+| 검사 API | 요청 검증, 파일 저장, SSE 스트리밍, 중단된 검사 재개 | `server.py` (`:8100`) |
+| v2 검사 워크플로 | 외관 확인부터 보고서 확정까지 단계별로 실행 | `agent/graph.py` |
+| v1 비교 기준 | VLM 한 번으로 B0·B1 조건 실행 | `agent/supervisor_v1.py` |
+| vision MCP | 이미지 검사 도구, 기준서·조치 가이드·프롬프트 제공 | `mcp_server_vision.py` |
+| docs MCP | 여러 MCP 중 올바른 서버를 고르는지 확인하기 위한, 이미지 검사와 관계없는 문서 리소스 | `mcp_server_docs.py` |
+| 검사 기준 검색 | 이미지 검사 결과와 관련된 기준서 조항 검색 | `agent/rag.py`, `data/specs/` |
+| 상태 저장 | 대화 기록과 승인 대기 시점의 검사 상태를 별도 보존 | `session.db`, `checkpoints.db` |
+| 실행 추적 | 활성화했을 때 노드·모델 호출 계층을 실행 단위로 기록 | LangSmith trace |
+
+평가 실행기는 FastAPI를 호출하지 않는다. 평가 프로세스가 MCP와 필요한 의존성을 직접 준비한 뒤
+B0·B1은 `run_v1`, A 계열은 v2 그래프를 같은 프로세스 안에서 직접 실행한다.
+
+## 3. v2 검사 상세 흐름
 
 ```mermaid
-sequenceDiagram
-    participant B as 브라우저
-    participant S as server.py
-    participant G as graph
-    participant M as MCP vision 서버
-    participant V as VLM
-    participant X as SpecIndex
+flowchart TB
+    Request["요청 접수"] --> Route{"요청 분류"}
+    Route -->|"일반 대화"| Chat["대화 응답"]
+    Route -->|"이미지 검사"| Prepare["검사 순서 준비·점검"]
 
-    B->>S: POST /inspect (file, item=screw)
-    S->>S: data/uploads/{thread}/{uuid}.png 저장
-    S->>G: astream({image_path, item, query})
-    G-->>S: RouteDecided(inspection) → SSE
-    G->>M: find_prompt → get_prompt(inspection_prompt)
-    G-->>S: PlanCreated(3 tasks) · GateApplied
-    par Observer
-        G->>M: inspect_image ×5 (full, tl, tr, bl, br) with_retry
-        M->>V: 관찰 요청 (참조 이미지 1-shot)
-        V-->>M: {text, anomaly_seen, regions, features}
-        M-->>G: ObservationReady ×5 → SSE
-    and Cross-Checker
-        G->>M: inspect_image (flip, checklist, 다른 모델)
-        M->>V: 체크리스트 재판독
-        V-->>M: {anomaly_seen, regions}
-        M-->>G: CrossCheckDone → SSE
-    end
-    G->>X: search(관찰문, item, k=3)
-    X-->>G: spec_hits
-    G->>G: judge(관찰문, 조항) → judgement
-    G-->>S: SpecJudged(clause_ids) → SSE
-    G->>G: analysis 합의 규칙 → verdict/confidence
-    G-->>S: AnalysisDecided → SSE
-    G->>M: guide://{defect_type} (REJECT 일 때)
-    G->>G: write → report JSON (AnswerToken 스트리밍)
-    G->>G: hitl: required=false → 통과
-    G->>G: validate 4규칙
-    alt 불합격
-        G-->>S: Validation(불합격, errors) → SSE
-        G->>G: write 재작성 (≤2회)
-    end
-    G-->>S: Validation(합격) · Finalize
-    S-->>B: FinalAnswer(보고서) · [DONE]
-    S->>S: session.db 저장
+    Prepare --> First["1차 이미지 검사<br/>원본 + 4개 영역"]
+    Prepare --> Second["다른 관점으로 다시 검사<br/>좌우 반전 + 체크리스트"]
+    First --> Compare["검사 기준 검색·대조"]
+    Second --> Compare
+
+    Compare --> Enough{"1차 검사에서 외관을<br/>확인할 수 있었나?"}
+    Enough -->|"아니오, 1회"| Center["중앙 영역 추가 확인"]
+    Center --> Compare
+    Enough -->|"예"| Decide["규칙 기반 종합 판정"]
+
+    Decide --> Write["검사 보고서 작성"]
+    Write --> Approval["필요한 경우<br/>담당자 승인"]
+    Approval -->|"반려"| Write
+    Approval -->|"승인 또는 승인 불필요"| Validate["근거·형식 검증"]
+    Validate -->|"수정, 최대 2회"| Write
+    Validate -->|"통과"| Final["최종 결과 확정"]
 ```
 
-## 4. 시퀀스 — HITL 승인 (interrupt → resume)
+| 문서의 역할명 | 코드 노드 | 핵심 처리 |
+|---|---|---|
+| 요청 분류 | `route` | 일반 대화, 품목 선택 요청, 이미지 검사로 분기 |
+| 검사 순서 준비 | `plan` | 이미지 검사·다시 검사·기준 대조 작업 생성 |
+| 허용 작업 점검 | `gate` | 지원 품목과 허용된 작업 종류만 통과 |
+| 1차 이미지 검사 | `observer` | 원본과 네 개 사분면을 병렬로 검사해 `observations` 생성 |
+| 다른 관점으로 다시 검사 | `cross_checker` | 좌우 반전 이미지와 체크리스트로 별도 확인 |
+| 검사 기준 검색·대조 | `spec_judge` | 1차 검사 결과로 관련 조항을 검색하고 위반 여부 정리 |
+| 정보 충분성 확인 | `replan_check` | 판독이 어려우면 중앙 영역을 한 번만 추가 |
+| 종합 판정 | `analysis` | 세 결과를 코드 규칙으로 조합해 PASS·REJECT·ABSTAIN 결정 |
+| 검사 보고서 작성 | `write` | 근거·확신도·조치 방안을 정해진 JSON 형식으로 작성 |
+| 담당자 승인 | `hitl` | 필요한 경우만 실행을 중단하고 승인·반려 대기 |
+| 근거·형식 검증 | `validate` | 인용 근거, 기준서 조항, 조치 방안, 보고서 형식을 코드로 검증 |
+| 최종 결과 확정 | `finalize` | 최종 보고서와 이벤트 완료 |
+
+실행 순서의 핵심은 다음과 같다.
+
+- `observer`와 `cross_checker`는 같은 시점에 시작하고, 둘 다 끝난 뒤
+  `spec_judge`가 실행된다. 기준 검색 질의는 1차 이미지 검사 결과를 쓴다.
+- 중앙 영역을 추가로 확인할 때는 이미 끝난 `cross_checker`를 다시 호출하지
+  않는다. 새로 얻은 결과를 포함해 기준 대조만 다시 수행한다.
+- VLM은 MCP vision 서버의 `inspect_image`를 통해서만 호출한다. 그래프 노드는
+  VLM 백엔드를 직접 알지 못한다.
+- `gate`, `analysis`, `validate`는 LLM을 호출하지 않고 코드 규칙만으로
+  결정한다.
+
+## 4. 담당자 승인과 재개
 
 ```mermaid
-sequenceDiagram
-    participant B as 브라우저
-    participant S as server.py
-    participant G as graph (checkpointer)
-    participant DB as checkpoints.db
-
-    B->>S: POST /inspect (file, item=bottle)
-    S->>G: astream(..., config.thread_id)
-    Note over G: … analysis → REJECT, actions=[폐기, 라인정지]
-    G->>G: hitl: required=true, HITL_MODE=interactive
-    G->>DB: 상태 체크포인트 저장
-    G-->>S: __interrupt__ (ApprovalRequired + report)
-    S-->>B: ApprovalRequired → data: [PAUSED]
-    Note over B: 보고서 요약 카드 + [승인] [반려]
-    B->>S: POST /chat/resume {thread_id, decision: approve}
-    S->>G: astream(Command(resume={decision}), config.thread_id)
-    G->>DB: 체크포인트 복원
-    G->>G: hitl 재개 → approval.decision=approve
-    G->>G: validate → finalize
-    S-->>B: ApprovalResolved · Validation · FinalAnswer · [DONE]
-    Note over S,DB: 서버가 재시작돼도 checkpoints.db 가 있으면<br/>같은 thread_id 로 resume 가능 (tests/test_resume_restart.py)
+stateDiagram-v2
+    [*] --> Draft: 보고서 초안 작성
+    Draft --> Validate: 승인 불필요
+    Draft --> Paused: 승인 필요
+    Paused --> Draft: 반려
+    Paused --> Validate: 승인
+    Validate --> Done: 검증 통과
+    Validate --> Draft: 검증 실패·재작성 가능
+    Validate --> Paused: 재작성 상한·ABSTAIN
+    Done --> [*]
 ```
 
-## 5. 시퀀스 — Before 기준선 (v1, 평가용)
+| 상황 | 동작 |
+|---|---|
+| 승인 필요 보고서 | `ApprovalRequired` 이벤트와 현재 `approval_id`를 보내고 `[PAUSED]`로 멈춤 |
+| 승인 대기 중 같은 `thread_id`에 새 요청 | 기존 검사를 먼저 재개하도록 `409` 응답 |
+| `/chat/resume` 요청 | namespace·`thread_id`·현재 `approval_id`가 정확히 일치할 때만 재개 |
+| 누락·이전·다른 실행의 `approval_id` | `422` 또는 `409`로 거부 |
+| 반려 또는 검증 실패로 새 초안 생성 | 이전 승인을 재사용하지 않고 필요하면 새 `approval_id`로 다시 승인 |
+| 서버 재시작 | `checkpoints.db`에서 상태를 복원해 같은 ID로 계속 |
+
+상태 저장 namespace는 `v2`, `v1:B0`, `v1:B1`로 나뉜다. 같은 사용자 ID를 써도
+전체 에이전트와 두 비교 기준의 실행 상태가 섞이지 않는다.
+
+## 5. 평가 증거가 만들어지는 과정
 
 ```mermaid
-sequenceDiagram
-    participant E as eval/run_eval.py
-    participant S as bootstrap (in-process)
-    participant V1 as supervisor_v1.run_v1
-    participant M as MCP vision 서버
-
-    E->>S: 조건 B0 또는 B1, HITL_MODE=auto_approve
-    loop held-out 샘플마다
-        E->>V1: run_v1(image_path, item, BASELINE_MODE)
-        alt B1
-            V1->>M: spec://{item} 전문 읽기
-        end
-        V1->>M: inspect_image(style=baseline, 참조 이미지, 유형 목록[, 기준서 전문])
-        M-->>V1: {verdict, defect_type, observations}
-        V1-->>E: report 스키마로 감싼 결과
-        E->>E: jsonl 1줄 기록 (latency, tokens, usd, run_id)
-    end
-    E->>E: report.py → balanced acc · FNR · 유형 F1 · McNemar(B0 vs A)
+flowchart TB
+    Data["고정된 평가 목록<br/>dev 52 · heldout 140"]
+    Data --> Main["최종 평가용 데이터<br/>B0 · B1 · A"]
+    Data --> Dev["개발용 데이터<br/>B0 · B1 · A · A-X · A-C · A-V"]
+    Main --> Run["서버 없이 조건별 실행"]
+    Dev --> Run
+    Run --> Rows["조건별 JSONL 결과"]
+    Rows --> Score["전체 평가 ID를 기준으로<br/>성능·비용 집계"]
+    Rows --> Blind["같은 A 실행의 검증 전·후<br/>20쌍 사람 블라인드 채점"]
+    Blind --> H3["H3 별도 집계"]
+    Score --> Result["지표·비용·통계 보고"]
+    H3 --> Result
 ```
 
-## 6. 평가 데이터 흐름
+평가 목록은 `sh/setup_data.sh`과 `eval/make_dataset.py`가 MVTec AD의 외부 폴더
+라벨을 읽어 만들며, 고정 seed로 개발용 52장과 최종 평가용 140장을 나눈다.
+검사 기준서는 판정 근거이지만 정답 라벨은 아니다.
 
-```mermaid
-flowchart LR
-    HF["HuggingFace<br/>foersben/mvtec-ad"] -->|"sh/setup_data.sh"| MV["data/mvtec/{item}/test/{label}/*.png<br/>(gitignore)"]
-    MV -->|"eval/make_dataset.py<br/>층화 30/70, seed 고정"| DS["eval/dataset.json<br/>192장: dev 52 · heldout 140"]
-    DS --> RUN["eval/run_eval.py<br/>--condition B0|B1|A|A-X|A-C|A-V"]
-    SPEC["data/specs/*.md<br/>(라벨 미참조로 작성, git 고정)"] --> RUN
-    RUN --> RES["eval/results/{condition}_{split}.jsonl"]
-    RES --> REP["eval/report.py<br/>지표 표 · McNemar · 품목별 분해"]
-    RES --> HC["eval/human_check.py<br/>블라인드 30건 환각 채점"]
-    REP --> README["README 결과 표"]
-    HC --> README
-```
+| 조건 | 비교 방식 | 사용 데이터 | 해석 범위 |
+|---|---|---|---|
+| B0 | 결함 유형 목록을 받은 VLM 한 번 | dev(탐색) + heldout(최종) | 단일 VLM 비교 기준 |
+| B1 | B0 + 해당 품목 기준서 전문 | dev(탐색) + heldout(최종) | 소규모 기준서 전문 삽입 방식 |
+| A | 전체 v2 검사 워크플로 | dev(탐색) + heldout(최종) | B0 대비 전체 시스템 효과 |
+| A-X | 다른 관점의 재검사 제거 | dev 전용 | 탐색적 구성요소 비교 |
+| A-C | 영역별·중앙 추가 이미지 검사 제거 | dev 전용 | 탐색적 구성요소 비교 |
+| A-V | 보고서 근거 검증 비활성 | dev 전용 | 실행 진단용, H3 인과 근거로 사용하지 않음 |
 
-정답 라벨은 폴더명(외부)에서만 온다. 기준서는 판정의 참고 자료이지 채점 기준이 아니다.
+- 최종 평가용 데이터에서는 B0·B1·A만 허용한다. 임의 품목 필터·건수 제한·
+  fake 백엔드·dry-run을 거부하고, `--final-run`과 데이터셋 hash가 든 동결
+  manifest를 모두 확인한다.
+- 성공한 행만 모아 성능을 계산하지 않는다. `eval/dataset.json`의 전체 ID에
+  각 조건 결과를 맞추고, 누락·오류·`ABSTAIN`·무효 판정도 종단 지표의 오답으로
+  남긴다.
+- H1은 balanced accuracy, H2는 결함 유형 macro-F1에 맞는 짝지은 순열
+  검정을 쓴다. 이진 정오 McNemar는 보조 분석으로만 보고한다.
+- H3는 별도 A-V 실행을 비교하지 않고, 같은 A 실행이 만든 첫 보고서와
+  최종 보고서 20쌍을 블라인드로 채점한다.
+- H3 결론은 heldout A에서 seed `20261020`으로 미리 고정한 20쌍을 완전히
+  채점했을 때만 허용한다. 선택된 결과에 누락·오류가 있어도 다른 표본으로
+  바꾸지 않고 결론을 중단한다.
+- dev에서는 H1·H2·H4의 수치만 탐색하고 가설을 확정하지 않는다.
+
+## 6. 반드시 유지할 설계 규칙
+
+1. VLM은 MCP 도구 뒤에만 있다. 그래프 노드는 모델 백엔드를 직접 호출하지 않는다.
+2. 1차 이미지 검사와 다른 관점의 재검사는 병렬로 시작한다. 검사 기준 대조는
+   두 결과가 모두 준비된 뒤 실행한다.
+3. `gate`, `analysis`, `validate`는 LLM이 아닌 코드 규칙으로 결정한다.
+4. 비교 기준 B0·B1과 전체 에이전트 A는 같은 평가 ID를 사용한다.
+5. 누락·오류·판독 불가를 성능 분모에서 제외하지 않는다.
+6. 담당자가 본 보고서와 최종 보고서가 달라지면 기존 승인을 재사용하지 않는다.
