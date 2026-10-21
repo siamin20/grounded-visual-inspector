@@ -1339,7 +1339,9 @@ R0 및 후속 보정 Phase의 테스트는 한 가지 기법이 아니라 다음
   - `compileall`, 핵심 import, 수정 shell 문법, `git diff --check`가 통과했다.
   - 기준서·가이드·`type_map.json`·dataset·lots의 diff는 없었다.
   - held-out 평가와 이미지 열람은 하지 않았다.
-  - 같은 reference로 stage 쌍을 추정할 수 있는 1인 블라인드 한계는 공개한다.
+  - 두 보고서에 같은 기준서 인용(reference)이 반복되면, 채점자가 두 보고서가
+    validate 전·후 한 쌍이라는 사실을 눈치챌 수 있다. 완전한 블라인드 평가는
+    아니므로 이 점과 1인 채점의 한계를 결과 보고서에 명시한다.
   - 실제 실행 provenance 전체 동결은 R5 종료 게이트에서 확인한다.
   - R4 범위 P0/P1은 없다.
   - 독립 종료 판정은 `GO WITH RISKS`다.

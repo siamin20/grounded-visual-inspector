@@ -86,17 +86,17 @@ bash sh/run_eval_heldout.sh   # held-out: B0, B1, A 후 summary_heldout.md
 |---|---:|---:|---:|
 | 사전 등록 / 결과 N | TBD / TBD | TBD / TBD | TBD / TBD |
 | 누락 / 오류 / ABSTAIN N | TBD / TBD / TBD | TBD / TBD / TBD | TBD / TBD / TBD |
-| 종단 balanced accuracy | TBD | TBD | TBD |
-| 정상 / 결함 실패율 | TBD / TBD | TBD / TBD | TBD / TBD |
+| End-to-end Balanced Accuracy | TBD | TBD | TBD |
+| False Positive Rate (FPR) / False Negative Rate (FNR) | TBD / TBD | TBD / TBD | TBD / TBD |
 | Coverage | TBD | TBD | TBD |
-| Selective accuracy / F1 | TBD / TBD | TBD / TBD | TBD / TBD |
-| 결함 유형 macro-F1 | TBD | TBD | TBD |
+| Selective Accuracy / Selective F1 | TBD / TBD | TBD / TBD | TBD / TBD |
+| Defect-type Macro-F1 | TBD | TBD | TBD |
 | 인용 충실도 | TBD | TBD | TBD |
 | 지연 p50 / p95 (초) | TBD / TBD | TBD / TBD | TBD / TBD |
 | 평균 비용 (USD/장) | TBD | TBD | TBD |
 
-H1은 정상/결함 층화 paired permutation의 Δbalanced accuracy, H2는
-품목/진실 유형 층화 paired permutation의 Δmacro-F1로 검정하며 각각 paired
+H1은 정상/결함 층화 paired permutation의 ΔBalanced Accuracy, H2는
+품목/진실 유형 층화 paired permutation의 ΔMacro-F1로 검정하며 각각 paired
 bootstrap 95% CI를 함께 기록한다: **TBD**. 전체 이진 정오 McNemar는 보조
 분석이다. H3는 B0/A를 섞지 않고 동일 A 실행의 첫 write snapshot과 최종
 보고서 20쌍을 블라인드 claim 채점한다(validate 전/후 관측 환각 포함률:
