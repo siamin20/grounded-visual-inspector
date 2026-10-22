@@ -179,6 +179,7 @@ def test_output_flags_and_warning_are_not_configurable(tmp_path) -> None:
         "heldout_validated": False,
         "claim_status": cascade_eval.CLAIM_STATUS,
         "warning": cascade_eval.WARNING,
+        "safety": {"defect_b0_abstain_to_a_plus_pass_n": 1},
         "metrics": {
             key: {
                 "accuracy": 0.0,
@@ -203,6 +204,8 @@ def test_output_flags_and_warning_are_not_configurable(tmp_path) -> None:
     markdown = markdown_path.read_text(encoding="utf-8")
     assert cascade_eval.MARKDOWN_WARNING in markdown
     assert cascade_eval.WARNING in markdown
+    assert "실제 결함 1건" in markdown
+    assert "지연·계산 자원은 아직 미측정" in markdown
     payload = __import__("json").loads(json_path.read_text(encoding="utf-8"))
     assert payload["post_hoc_dev"] is True
     assert payload["primary_hypothesis"] is False
@@ -230,3 +233,11 @@ def test_small_golden_metrics_match_fixed_policy() -> None:
     assert metrics["accuracy"] == 1.0
     assert metrics["balanced_accuracy"] == 1.0
     assert cascade_eval.mcnemar(b0, derived, expected)["overall"]["p_value"] == 1.0
+    risky_audit = [{
+        "id": "defect",
+        "b0_verdict": "ABSTAIN",
+        "cascade_verdict": "PASS",
+    }]
+    assert cascade_eval.summarize_safety(risky_audit, expected) == {
+        "defect_b0_abstain_to_a_plus_pass_n": 1,
+    }

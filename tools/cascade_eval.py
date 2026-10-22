@@ -200,6 +200,25 @@ def build_cascade_rows(
     return derived, audit_rows
 
 
+def summarize_safety(
+    audit_rows: Sequence[Mapping[str, Any]],
+    expected_rows: Sequence[Mapping[str, Any]],
+) -> dict[str, int]:
+    """정답은 집계에만 사용해 cascade의 미검 전이를 센다."""
+    expected_by_id = {str(row["id"]): row for row in expected_rows}
+    risk_n = 0
+    for row in audit_rows:
+        expected = expected_by_id.get(str(row.get("id")))
+        if (
+            expected is not None
+            and expected.get("is_defect") is True
+            and row.get("b0_verdict") == "ABSTAIN"
+            and row.get("cascade_verdict") == "PASS"
+        ):
+            risk_n += 1
+    return {"defect_b0_abstain_to_a_plus_pass_n": risk_n}
+
+
 def _require_manifest_contract(manifest: Mapping[str, Any]) -> None:
     if manifest.get("status") != "complete":
         raise CascadeDataError("완료된 suite만 A+ 분석에 사용할 수 있습니다.")
@@ -283,6 +302,7 @@ def analyze_run(run_dir: str | Path) -> dict[str, Any]:
         raise CascadeDataError(f"원본 결과/roster 로드 실패: {exc}") from exc
 
     derived_rows, audit_rows = build_cascade_rows(b0_rows, a_rows, expected_rows)
+    safety = summarize_safety(audit_rows, expected_rows)
     b0_metric = binary_metrics(b0_rows, expected_rows)
     a_metric = binary_metrics(a_rows, expected_rows)
     cascade_metric = binary_metrics(derived_rows, expected_rows)
@@ -346,6 +366,7 @@ def analyze_run(run_dir: str | Path) -> dict[str, Any]:
             "dev 결과를 본 뒤 정의한 사후 정책",
             "held-out 미검증",
         ],
+        "safety": safety,
         "rows": audit_rows,
     }
 
@@ -354,6 +375,7 @@ def render_markdown(artifact: Mapping[str, Any]) -> str:
     """탐색적 제약이 눈에 띄는 공개용 Markdown을 만든다."""
     metrics = artifact["metrics"]
     comparison = artifact["comparison"]
+    safety = artifact["safety"]
 
     def percent(value: Any) -> str:
         return f"{float(value) * 100:.2f}%"
@@ -389,6 +411,12 @@ def render_markdown(artifact: Mapping[str, Any]) -> str:
         f"- B0 대비 Balanced Accuracy 차이: "
         f"{float(comparison['balanced_accuracy_delta_vs_b0']) * 100:+.2f}%p",
         f"- B0 대비 McNemar exact p-value: `{float(overall['p_value']):.6f}`",
+        "",
+        "B0가 보류한 실제 결함 "
+        f"{int(safety['defect_b0_abstain_to_a_plus_pass_n'])}건을 "
+        "A의 `PASS`로 바꾸는 미검 위험이 있었고,",
+        "B0와 A를 모두 실행하므로 결합 end-to-end 지연·계산 자원은 "
+        "아직 미측정이다.",
         "",
         "이 결과는 dev 결과를 본 후 정의한 후속 탐색이다. "
         "A의 primary 성능 결과를 대체하지 않으며 held-out으로 검증되지 않았다.",
