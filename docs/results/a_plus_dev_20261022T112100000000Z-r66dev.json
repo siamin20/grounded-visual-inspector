@@ -1,5 +1,5 @@
 {
-  "analysis_git_commit": "41ab65d3bd51e8185f1ad429cd563ba515015e92",
+  "analysis_git_commit": "a79776ee9813d6ec759b85773d5de9bb4195a88b",
   "analysis_type": "post_hoc_dev_cascade",
   "claim_status": "exploratory_only",
   "comparison": {
@@ -58,7 +58,7 @@
       "swappable_pairs": 5
     }
   },
-  "generated_at": "2026-10-22T03:35:21.934745Z",
+  "generated_at": "2026-10-22T03:40:00.627374Z",
   "heldout_validated": false,
   "limitations": [
     "B0와 A를 모두 실행해야 하며 결합 end-to-end 지연·자원은 미측정",
@@ -649,11 +649,14 @@
     }
   ],
   "run_id": "20261022T112100000000Z-r66dev",
+  "safety": {
+    "defect_b0_abstain_to_a_plus_pass_n": 1
+  },
   "schema_version": 1,
   "source_hashes": {
     "A_result": "a433a459e0162584c6e980fe37aa49b9a9ed4e3a9d18cefa99024186da97c1c2",
     "B0_result": "59808d0d70d9d5632b9a44c2c3f27a2850fee3165a2624b513e178dff15bc6e0",
-    "analysis_code": "107a010913d0986212aea4da13c66cd945bd5e6d0eccf8d3254cd32a2552b0c1",
+    "analysis_code": "4a0dee28aadcfb1eb58bdbdb83fa382b1ad8fab88ac3dfa758e015dddd91d73f",
     "dataset": "445ce55bd3647b95677c4b372ae1ed6c3d26081b61ff57ee483b168e3dbd694b",
     "manifest": "3e314a28198f8b7bcf3a80b80a03ec6d05988f94d33231d71594fe601487c4d4"
   },

@@ -144,7 +144,7 @@ LLM_BACKEND=fake VLM_BACKEND=fake EMBED_BACKEND=fake \
   .venv/bin/python3 -m pytest -q
 ```
 
-최신 전체 회귀 결과: **685 passed in 29.62s**.
+최신 전체 회귀 결과: **685 passed**.
 
 ## 5. Before / After 비교
 

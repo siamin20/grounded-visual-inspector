@@ -2105,7 +2105,7 @@ R0 및 후속 보정 Phase의 테스트는 한 가지 기법이 아니라 다음
   - B0가 보류했던 실제 결함 1건을 A가 `PASS`로 바꾸는 미검 위험이
     있고, B0/A 두 실행의 지연·자원을 모두 요구한다.
   - A+ 결정표·roster·provenance 검증을 포함한 fake 전체 회귀는
-    `685 passed in 29.62s`, `git diff --check`를 통과했다.
+    `685 passed`, `git diff --check`를 통과했다.
     정식 R6.6 원본에는 오류 행이 0건이어서 보정 전후 수치는 같았다.
   - 따라서 주 A 성능 가설은 `NO-GO`, A+는 held-out 전 동결
     후보로만 `GO WITH RISKS`다. 기능·평가 무결성 제출은 `GO`다.
