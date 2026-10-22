@@ -43,8 +43,12 @@ class AgentState(TypedDict, total=False):
     lot: dict
     observations: list[dict]
     cross_check: dict
+    # Spec-Judge가 실제 RAG 검색·판정에 넘긴 구조화된 관찰문.
+    rag_query_text: str
     spec_hits: list[dict]
+    raw_judgement: dict | None
     judgement: dict
+    judgement_corrected: bool
     judgement_status: str
     verdict: str
     defect_type: str | None

@@ -57,6 +57,7 @@ class SupervisorDeps:
     mcp: Any             # Wave 2  — MCP stdio 클라이언트 (Tool/Resource/Prompt)
     session_store: Any   # Wave 12 — SQLite 세션 저장소
     version: str         # Wave 14 — SUPERVISOR_VERSION (v1/v2)
+    judge_llm: Any = None  # Spec-Judge 전담. 생략 시 fast_llm을 재사용.
     vector_store: Any = None
     checkpointer: Any = None
     hitl_mode: str = "interactive"
@@ -67,3 +68,7 @@ class SupervisorDeps:
         self.version = validate_supervisor_version(self.version)
         self.hitl_mode = validate_hitl_mode(self.hitl_mode)
         self.ablation = validate_ablation(self.ablation)
+        if self.judge_llm is None:
+            # _build_llms의 3-tuple 공통 인터페이스를 유지하면서
+            # Ollama에서만 fast 번들에 붙인 전담 Judge를 승격한다.
+            self.judge_llm = getattr(self.fast_llm, "judge_llm", self.fast_llm)

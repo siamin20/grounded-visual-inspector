@@ -13,6 +13,7 @@ from agent.usage import (
     nonnegative_finite_float,
     nonnegative_int,
 )
+from agent.vision.contracts import normalized_checklist
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -532,16 +533,37 @@ def cross_status(cross_check: Any, *, skipped: bool = False) -> str:
         return "C?"
     summary = cross_check.get("summary")
     regions = cross_check.get("regions")
+    features = cross_check.get("features")
+    checks = normalized_checklist(cross_check.get("checks"))
+    summary_synthesized = cross_check.get("summary_synthesized", False)
     if (
         type(cross_check.get("anomaly_seen")) is not bool
+        or type(summary_synthesized) is not bool
+        or summary_synthesized
         or not isinstance(summary, str)
         or is_unreadable_text(summary)
         or "판독 불가" in summary
         or not isinstance(regions, list)
-        or any(region not in _REGIONS for region in regions)
+        or any(
+            not isinstance(region, str) or region not in _REGIONS
+            for region in regions
+        )
+        or not isinstance(features, list)
+        or any(
+            not isinstance(feature, str) or not feature.strip()
+            for feature in features
+        )
+        or checks is None
     ):
         return "C?"
-    return "C+" if cross_check["anomaly_seen"] is True else "C-"
+    expected_anomaly = any(checks.values())
+    if cross_check["anomaly_seen"] is not expected_anomaly:
+        return "C?"
+    if expected_anomaly and (not regions or not features):
+        return "C?"
+    if not expected_anomaly and (regions or features):
+        return "C?"
+    return "C+" if expected_anomaly else "C-"
 
 
 def normalized_judgement_status(judgement: Any) -> str:

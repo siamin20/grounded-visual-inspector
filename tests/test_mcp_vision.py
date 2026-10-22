@@ -104,6 +104,24 @@ def test_inspect_result_preserves_unknown_observed_model() -> None:
     assert serialized["successful_provider_requests"] == 1
 
 
+def test_inspect_result_exposes_checks_only_for_checklist() -> None:
+    values = _inspect_result_kwargs()
+    checks = {
+        "scratch": False,
+        "break_or_crack": False,
+        "contamination": False,
+        "discoloration": False,
+        "bend_or_deformation": False,
+        "thread_damage": False,
+    }
+
+    plain = InspectResult(**values).model_dump()
+    checklist = InspectResult(**values, checks=checks).model_dump()
+
+    assert "checks" not in plain
+    assert checklist["checks"] == checks
+
+
 @pytest.mark.asyncio
 async def test_vision_server_exposes_tool_resources_and_prompt(
     monkeypatch: pytest.MonkeyPatch,

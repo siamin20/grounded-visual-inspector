@@ -9,9 +9,19 @@ from types import SimpleNamespace
 import pytest
 
 from agent.retry import with_retry as real_with_retry
+from agent.subgraphs import cross_checker as cross_checker_module
 from agent.subgraphs import observer as observer_module
 from agent.subgraphs.research import build_research_subgraph
-from agent.subgraphs.spec_judge import _validated_judgement
+from agent.subgraphs.spec_judge import (
+    _build_evidence_text,
+    _validated_judgement,
+    spec_judge_node,
+)
+from agent.vision.contracts import CHECKLIST_KEYS
+
+
+def _checks(*true_keys: str) -> dict[str, bool]:
+    return {key: key in true_keys for key in CHECKLIST_KEYS}
 
 
 class FakeMCP:
@@ -39,29 +49,34 @@ class FakeMCP:
             self._failed = True
             raise asyncio.TimeoutError("test transient")
 
-        if request["style"] == "checklist":
-            return {
-                "text": "체크리스트에서 긁힘 항목은 예입니다.",
-                "anomaly_seen": True,
-                "regions": ["tl", "br"],
-                "features": ["선형 흔적"],
-                "model": "fake-cross",
-                "tokens": 1,
-                "usd": 0.001,
-                "region": "full",
-                "flip": True,
-            }
         if self.unreadable:
             return {
                 "text": "판독 불가",
                 "anomaly_seen": None,
                 "regions": [],
                 "features": [],
-                "model": "fake-observer",
+                "model": (
+                    "fake-cross"
+                    if request["style"] == "checklist"
+                    else "fake-observer"
+                ),
                 "tokens": 1,
                 "usd": 0.001,
                 "region": request["region"],
-                "flip": False,
+                "flip": request["flip"],
+            }
+        if request["style"] == "checklist":
+            return {
+                "text": "체크리스트에서 긁힘 항목은 예입니다.",
+                "anomaly_seen": True,
+                "regions": ["tl", "br"],
+                "features": ["선형 흔적"],
+                "checks": _checks("scratch"),
+                "model": "fake-cross",
+                "tokens": 1,
+                "usd": 0.001,
+                "region": "full",
+                "flip": True,
             }
         region = request["region"]
         return {
@@ -279,6 +294,21 @@ def test_spec_judge_rejects_mixed_supported_and_unknown_claim() -> None:
             "defect_type": "scratch_neck",
             "rationale": "x",
         },
+        {
+            "violations": ["SCREW-03", "SCREW-03"],
+            "defect_type": "scratch_neck",
+            "rationale": "x",
+        },
+        {
+            "violations": ["SCREW-03", "SCREW-03", "SCREW-03", "SCREW-03"],
+            "defect_type": "scratch_neck",
+            "rationale": "x",
+        },
+        {
+            "violations": ["SCREW-03"],
+            "defect_type": "scratch_neck",
+            "rationale": "x" * 241,
+        },
     ],
 )
 def test_spec_judge_malformed_or_contradictory_claim_is_invalid(raw) -> None:
@@ -311,11 +341,121 @@ def test_spec_judge_accepts_only_explicit_well_formed_no_claim() -> None:
     assert corrected is False
 
 
+def test_evidence_builder_uses_positive_observations_and_never_state_labels() -> None:
+    evidence = _build_evidence_text(
+        [
+            {
+                "region": "full",
+                "text": "전체 윤곽은 균일합니다.",
+                "anomaly_seen": False,
+                "features": ["균일한 윤곽"],
+                "label": "scratch_neck",
+                "image_path": "/secret/test/scratch_neck/001.png",
+            },
+            {
+                "region": "tr",
+                "text": "목 부위에 선형 흔적이 보입니다.",
+                "anomaly_seen": True,
+                "features": ["선형 흔적", "목 부위", "선형 흔적"],
+                "label": "scratch_neck",
+                "image_path": "/secret/test/scratch_neck/001.png",
+            },
+        ],
+        {
+            "summary": "교차 확인에서 같은 선형 흔적이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tr"],
+            "features": ["선형 흔적"],
+            "checks": _checks("scratch"),
+            "label": "scratch_neck",
+            "image_path": "/secret/test/scratch_neck/001.png",
+        },
+    )
+
+    assert "목 부위에 선형 흔적" in evidence
+    assert "교차 확인" in evidence
+    assert "전체 윤곽은 균일" not in evidence
+    assert evidence.count("선형 흔적") >= 2
+    assert "scratch_neck" not in evidence
+    assert "/secret/" not in evidence
+
+
+def test_evidence_builder_excludes_unvalidated_generic_cross_positive() -> None:
+    evidence = _build_evidence_text(
+        [{
+            "region": "full",
+            "text": "전체 윤곽에서 구체적 이상이 보이지 않습니다.",
+            "anomaly_seen": False,
+            "features": ["균일한 윤곽"],
+        }],
+        {
+            "summary": "제품 외관이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["외관"],
+        },
+    )
+
+    assert "Cross-Checker" not in evidence
+    assert "제품 외관" not in evidence
+    assert "전체 윤곽" in evidence
+
+
+@pytest.mark.asyncio
+async def test_cross_only_positive_evidence_reaches_search_and_judge() -> None:
+    deps = _deps()
+    state = _state()
+    state["_observer_result"] = {
+        "observations": [{
+            "region": "full",
+            "text": "전체 윤곽은 균일합니다.",
+            "anomaly_seen": False,
+            "features": ["균일한 윤곽"],
+        }],
+        "events": [],
+        "done_task_indices": [0],
+    }
+    state["_cross_result"] = {
+        "cross_check": {
+            "call_id": "cc-full",
+            "anomaly_seen": True,
+            "regions": ["tr"],
+            "summary": "교차 검사에서 목 부위 선형 흔적이 보입니다.",
+            "features": ["선형 흔적", "목 부위"],
+            "checks": _checks("scratch"),
+            "model": "fake-cross",
+        },
+        "replace": True,
+        "events": [],
+        "done_task_indices": [1],
+    }
+
+    result = await spec_judge_node(state, deps)
+
+    assert result["rag_query_text"] == (
+        "Cross-Checker: 교차 검사에서 목 부위 선형 흔적이 보입니다.\n"
+        "Cross-Checker 특징: 선형 흔적, 목 부위"
+    )
+    assert "전체 윤곽은 균일" not in result["rag_query_text"]
+    assert deps.vector_store.search_calls[0]["query"] == result["rag_query_text"]
+    assert deps.fast_llm.calls[0]["observations_text"] == result["rag_query_text"]
+    assert result["judgement"]["status"] == "grounded"
+    assert result["raw_judgement"]["violations"] == ["SCREW-03"]
+    assert result["judgement_corrected"] is False
+
+
 @pytest.mark.asyncio
 async def test_research_runs_observer_and_cross_before_spec_judge(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     deps = _deps(fail_once_region="tl")
+    reference_path = "/synthetic/screw/train/good/000.png"
+    monkeypatch.setattr(
+        observer_module, "normal_reference_path", lambda _item: reference_path
+    )
+    monkeypatch.setattr(
+        cross_checker_module, "normal_reference_path", lambda _item: reference_path
+    )
 
     async def without_retry_delay(fn, *args, **kwargs):
         return await real_with_retry(fn, *args, base_delay=0, **kwargs)
@@ -336,12 +476,24 @@ async def test_research_runs_observer_and_cross_before_spec_judge(
         "anomaly_seen": True,
         "regions": ["tr", "bl"],
         "summary": "체크리스트에서 긁힘 항목은 예입니다.",
+        "features": ["선형 흔적"],
+        "checks": _checks("scratch"),
         "model": "fake-cross",
     }
     assert len(result["spec_hits"]) == 3
+    assert result["rag_query_text"] == _build_evidence_text(
+        result["observations"], result["cross_check"]
+    )
+    assert result["cross_check"]["summary"] in result["rag_query_text"]
     assert result["judgement"]["violations"] == ["SCREW-03"]
     assert result["judgement"]["defect_type"] == "scratch_neck"
     assert result["judgement"]["status"] == "grounded"
+    assert result["raw_judgement"] == {
+        "violations": ["SCREW-03"],
+        "defect_type": "scratch_neck",
+        "rationale": "관찰문의 선형 흔적과 조항이 일치합니다.",
+    }
+    assert result["judgement_corrected"] is False
     assert result["judgement_status"] == "grounded"
     assert all(task["status"] == "done" for task in result["tasks"])
     assert result["retry_count"] == 3
@@ -357,6 +509,11 @@ async def test_research_runs_observer_and_cross_before_spec_judge(
     cross_call = next(call for call in calls if call["style"] == "checklist")
     assert cross_call["flip"] is True
     assert cross_call["model_role"] == "cross"
+    assert cross_call["reference_path"] == reference_path
+    assert all(
+        call["reference_path"] == reference_path
+        for call in calls if call["style"] == "observe"
+    )
     assert all(call["flip"] is False for call in calls if call["style"] == "observe")
 
     event_types = [event["type"] for event in result["events"]]
@@ -382,6 +539,7 @@ async def test_research_runs_observer_and_cross_before_spec_judge(
         if event["type"] == "CrossCheckDone"
     )
     assert cross_event["summary"] == result["cross_check"]["summary"]
+    assert cross_event["checks"] == _checks("scratch")
 
 
 @pytest.mark.asyncio
@@ -459,6 +617,12 @@ async def test_spec_judge_corrects_ids_and_defect_type_outside_allowed_sets() ->
         "rationale": "교정 테스트",
         "status": "invalid",
     }
+    assert result["raw_judgement"] == {
+        "violations": ["SCREW-03", "MADE-UP-99"],
+        "defect_type": "invented_type",
+        "rationale": "교정 테스트",
+    }
+    assert result["judgement_corrected"] is True
     judged = next(event for event in result["events"] if event["type"] == "SpecJudged")
     assert judged["corrected"] is True
     assert judged["judgement_status"] == "invalid"
@@ -472,6 +636,7 @@ async def test_all_unreadable_observations_skip_search_and_judgement() -> None:
     result = await build_research_subgraph(deps).ainvoke(_state())
 
     assert len(result["observations"]) == 5
+    assert result["rag_query_text"] == ""
     assert result["spec_hits"] == []
     assert result["judgement"] == {
         "violations": [],
@@ -480,5 +645,7 @@ async def test_all_unreadable_observations_skip_search_and_judgement() -> None:
         "status": "none",
     }
     assert result["judgement_status"] == "none"
+    assert result["raw_judgement"] is None
+    assert result["judgement_corrected"] is False
     assert deps.vector_store.search_calls == []
     assert deps.fast_llm.calls == []

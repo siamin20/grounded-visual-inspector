@@ -15,6 +15,11 @@ from agent.nodes.common import (
     observer_status,
 )
 from agent.nodes.replan_check import replan_check_node
+from agent.vision.contracts import CHECKLIST_KEYS
+
+
+def _checks(*true_keys: str) -> dict[str, bool]:
+    return {key: key in true_keys for key in CHECKLIST_KEYS}
 
 
 def _observer(status: str, *, positive_region: str = "tl") -> list[dict]:
@@ -53,6 +58,8 @@ def _cross(status: str, *, positive_region: str = "tl") -> dict:
             "summary": "좌상단 이상 항목은 예입니다.",
             "anomaly_seen": True,
             "regions": [positive_region],
+            "features": ["선형 흔적"],
+            "checks": _checks("scratch"),
         }
     if status == "C-":
         return {
@@ -60,6 +67,8 @@ def _cross(status: str, *, positive_region: str = "tl") -> dict:
             "summary": "모든 이상 항목은 아니오입니다.",
             "anomaly_seen": False,
             "regions": [],
+            "features": [],
+            "checks": _checks(),
         }
     return {
         "call_id": "cc-full",
@@ -102,11 +111,11 @@ def _judgement(status: str) -> dict:
         # design.md §4.1 결정표 순서와 같은 순서다.
         ("O+", "C+", "V?", True, "", "ABSTAIN", "low", "validation_failure", True),
         ("O+", "C+", "V+", True, "", "REJECT", "high", None, True),
-        ("O+", "C+", "V+", False, "", "REJECT", "low", None, False),
-        ("O+", "C-", "V+", True, "", "REJECT", "low", None, False),
-        ("O+", "C?", "V+", True, "", "REJECT", "low", None, False),
-        ("O?", "C+", "V+", True, "", "REJECT", "low", None, False),
-        ("O-", "C+", "V+", True, "", "REJECT", "low", None, False),
+        ("O+", "C+", "V+", False, "", "ABSTAIN", "low", "evidence_conflict", False),
+        ("O+", "C-", "V+", True, "", "ABSTAIN", "low", "evidence_conflict", False),
+        ("O+", "C?", "V+", True, "", "ABSTAIN", "low", "evidence_conflict", False),
+        ("O?", "C+", "V+", True, "", "ABSTAIN", "low", "evidence_conflict", False),
+        ("O-", "C+", "V+", True, "", "ABSTAIN", "low", "evidence_conflict", False),
         ("O+", "C+", "V0", True, "", "ABSTAIN", "low", "ungrounded_anomaly", True),
         ("O+", "C-", "V0", True, "", "ABSTAIN", "low", "ungrounded_anomaly", False),
         ("O-", "C+", "V0", True, "", "ABSTAIN", "low", "ungrounded_anomaly", False),
@@ -178,8 +187,9 @@ async def test_positive_region_union_excludes_negative_observations() -> None:
     }
 
     result = await analysis_node(state, SimpleNamespace(ablation=""))
-    assert result["verdict"] == "REJECT"
+    assert result["verdict"] == "ABSTAIN"
     assert result["confidence"] == "low"
+    assert result["abstain_reason"] == "evidence_conflict"
     assert result["events"][-1]["agree"] is False
 
 
@@ -401,6 +411,18 @@ def test_malformed_cross_and_grounded_judgement_fail_closed() -> None:
         "violations": ["SCREW-04"],
         "defect_type": "scratch_neck",
     }) == "V?"
+
+
+def test_synthesized_cross_summary_never_becomes_confident_status() -> None:
+    """구조화 구조가 멀정해도 모델이 낸 요약은 독립 교차검증이 아니다."""
+    assert cross_status({
+        "summary": "체크리스트에서 이상 신호가 보고되지 않았습니다.",
+        "summary_synthesized": True,
+        "anomaly_seen": False,
+        "regions": [],
+        "features": [],
+        "checks": _checks(),
+    }) == "C?"
 
 
 @pytest.mark.asyncio

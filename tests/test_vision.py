@@ -18,6 +18,7 @@ from agent.vision.backends import (
     _normalize_result,
     make_vlm,
 )
+from agent.vision.contracts import CHECKLIST_KEYS
 from agent.vision.crop import crop_region, flip_h, unflip_regions
 
 
@@ -44,6 +45,10 @@ BACKEND_KEYS = {
 }
 INSPECT_KEYS = BACKEND_KEYS | {"region", "flip"}
 VALID_REGIONS = {"tl", "tr", "bl", "br", "center"}
+
+
+def _checks(*true_keys: str) -> dict[str, bool]:
+    return {key: key in true_keys for key in CHECKLIST_KEYS}
 
 
 class _ConcurrentSession:
@@ -259,6 +264,62 @@ async def test_vlm_korean_retry_accumulates_both_successful_requests(
 
 
 @pytest.mark.asyncio
+async def test_vlm_observe_enforces_checklist_contract_end_to_end(
+    tmp_path: Path,
+) -> None:
+    image_path = tmp_path / "image.png"
+    Image.new("RGB", (8, 8), "white").save(image_path)
+    raw = {
+        "text": "모든 점검 항목에서 이상이 보이지 않습니다.",
+        "anomaly_seen": False,
+        "regions": [],
+        "features": [],
+        "checks": _checks(),
+    }
+    usage = {
+        "model": "openai:resolved",
+        "tokens": 7,
+        "usd": 0.001,
+        "input_tokens": 5,
+        "output_tokens": 2,
+        "token_accounting": "provider_split",
+        "estimated_usd": 0.001,
+        "compute_proxy_usd": 0.0,
+        "requested_model": "openai:requested",
+        "observed_model": "openai:resolved",
+        "successful_provider_requests": 1,
+    }
+    vlm = _StubVLM([(json.dumps(raw, ensure_ascii=False), usage)])
+
+    result = await vlm.observe(
+        str(image_path),
+        item="screw",
+        region="full",
+        style="checklist",
+        flip=False,
+        reference_path=None,
+    )
+
+    assert result["anomaly_seen"] is False
+    assert result["checks"] == _checks()
+
+
+@pytest.mark.asyncio
+async def test_vlm_rejects_unknown_item_before_opening_image() -> None:
+    vlm = _StubVLM([])
+
+    with pytest.raises(ValueError, match="지원하지 않는 검사 품목"):
+        await vlm.observe(
+            "/does/not/exist.png",
+            item="unknown-item",
+            region="full",
+            style="observe",
+            flip=False,
+            reference_path=None,
+        )
+
+
+@pytest.mark.asyncio
 async def test_ollama_vlm_does_not_invent_missing_response_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -455,6 +516,441 @@ def test_observation_normalizer_canonicalizes_unreadable_text(
     assert result["anomaly_seen"] is None
     assert result["regions"] == []
     assert result["features"] == []
+
+
+@pytest.mark.parametrize(
+    ("regions", "features"),
+    [([], ["짧은 선형 흔적"]), (["tl"], []), ([], [])],
+)
+@pytest.mark.parametrize("style", ["observe", "checklist"])
+def test_positive_observation_requires_location_and_feature_evidence(
+    style: str, regions: list[str], features: list[str]
+) -> None:
+    result = _normalize_result(
+        {
+            "text": "머리 왼쪽에 짧은 선형 흔적이 보입니다.",
+            "anomaly_seen": True,
+            "regions": regions,
+            "features": features,
+        },
+        style=style,
+        model="test",
+        tokens=3,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["text"] == "판독 불가"
+    assert result["anomaly_seen"] is None
+    assert result["regions"] == []
+    assert result["features"] == []
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_anomaly"),
+    [
+        (
+            {
+                "text": "여섯 점검 항목 모두 이상이 보이지 않습니다.",
+                "anomaly_seen": False,
+                "regions": [],
+                "features": [],
+                "checks": _checks(),
+            },
+            False,
+        ),
+        (
+            {
+                "text": "좌상단에 짧은 선형 흔적이 보입니다.",
+                "anomaly_seen": True,
+                "regions": ["tl"],
+                "features": ["짧은 선형 흔적"],
+                "checks": _checks("scratch"),
+            },
+            True,
+        ),
+    ],
+)
+def test_checklist_normalizer_accepts_only_complete_consistent_contract(
+    raw: dict, expected_anomaly: bool
+) -> None:
+    result = _normalize_result(
+        raw,
+        style="checklist",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["anomaly_seen"] is expected_anomaly
+    assert result["checks"] == raw["checks"]
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected_text"),
+    [
+        (
+            {
+                "anomaly_seen": False,
+                "regions": [],
+                "features": [],
+                "checks": _checks(),
+            },
+            "체크리스트의 여섯 항목에서 이상 신호가 보고되지 않았습니다.",
+        ),
+        (
+            {
+                "anomaly_seen": True,
+                "regions": ["tl"],
+                "features": ["짧은 선형 흔적"],
+                "checks": _checks("scratch"),
+            },
+            "체크리스트의 여섯 항목에서 이상 신호가 보고되었습니다: 짧은 선형 흔적",
+        ),
+    ],
+)
+def test_checklist_missing_text_uses_structured_korean_summary(
+    raw: dict, expected_text: str
+) -> None:
+    result = _normalize_result(
+        raw,
+        style="checklist",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["text"] == expected_text
+    assert result["anomaly_seen"] is raw["anomaly_seen"]
+    assert result["checks"] == raw["checks"]
+    assert result["summary_synthesized"] is True
+
+
+@pytest.mark.parametrize(
+    "raw",
+    [
+        {
+            "text": "제품 외관이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["외관"],
+        },
+        {
+            "text": "긁힘이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["선형 흔적"],
+            "checks": {key: False for key in CHECKLIST_KEYS[:-1]},
+        },
+        {
+            "text": "긁힘이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["선형 흔적"],
+            "checks": {**_checks("scratch"), "other": False},
+        },
+        {
+            "text": "긁힘이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["선형 흔적"],
+            "checks": {**_checks(), "scratch": 1},
+        },
+        {
+            "text": "긁힘이 보입니다.",
+            "anomaly_seen": False,
+            "regions": ["tl"],
+            "features": ["선형 흔적"],
+            "checks": _checks("scratch"),
+        },
+        {
+            "text": "긁힘이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl", "outside"],
+            "features": ["선형 흔적"],
+            "checks": _checks("scratch"),
+        },
+        {
+            "text": "긁힘이 보입니다.",
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["선형 흔적", 1],
+            "checks": _checks("scratch"),
+        },
+        {
+            "text": "모든 항목이 정상입니다.",
+            "anomaly_seen": False,
+            "regions": [],
+            "features": ["균일한 표면"],
+            "checks": _checks(),
+        },
+    ],
+)
+def test_checklist_contract_failures_are_canonical_unreadable(raw: dict) -> None:
+    result = _normalize_result(
+        raw,
+        style="checklist",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["text"] == "판독 불가"
+    assert result["anomaly_seen"] is None
+    assert result["regions"] == []
+    assert result["features"] == []
+    assert "checks" not in result
+
+
+def test_cropped_observer_requires_source_region_for_positive_evidence() -> None:
+    raw = {
+        "text": "크롭 안에 짧은 선형 흔적이 보입니다.",
+        "anomaly_seen": True,
+        "regions": ["tl"],
+        "features": ["짧은 선형 흔적"],
+    }
+
+    mismatched = _normalize_result(
+        raw,
+        style="observe",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+        region="br",
+    )
+    matched = _normalize_result(
+        {**raw, "regions": ["br"]},
+        style="observe",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+        region="br",
+    )
+
+    assert mismatched["anomaly_seen"] is None
+    assert mismatched["regions"] == []
+    assert matched["anomaly_seen"] is True
+    assert matched["regions"] == ["br"]
+
+
+def test_cropped_observer_clears_negative_region_labels() -> None:
+    result = _normalize_result(
+        {
+            "text": "크롭 안에 구체적 이상이 보이지 않습니다.",
+            "anomaly_seen": False,
+            "regions": ["br"],
+            "features": ["균일한 표면"],
+        },
+        style="observe",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+        region="br",
+    )
+
+    assert result["anomaly_seen"] is False
+    assert result["regions"] == []
+
+
+@pytest.mark.parametrize(
+    ("style", "raw"),
+    [
+        (
+            "baseline",
+            {
+                "verdict": "PASS",
+                "defect_type": None,
+                "observations": ["눈으로 확인한 한국어 관찰"],
+            },
+        ),
+        (
+            "baseline",
+            {
+                "verdict": "PASS",
+                "defect_type": None,
+                "observations": [],
+                "text": "한국어 관찰",
+            },
+        ),
+        (
+            "observe",
+            {
+                "text": "한국어 관찰",
+                "anomaly_seen": False,
+                "regions": ["tl"],
+                "features": ["균일한 표면"],
+            },
+        ),
+        (
+            "checklist",
+            {
+                "text": "표면과 윤곽에서 이상이 보이지 않습니다.",
+                "anomaly_seen": False,
+                "regions": [],
+                "features": ["실제로 확인한 색·형태·상대 크기만 적으라"],
+            },
+        ),
+        (
+            "observe",
+            {
+                "text": "다른 사물명으로 바꾸어 추측하지 말라.",
+                "anomaly_seen": True,
+                "regions": ["br"],
+                "features": ["검은 점"],
+            },
+        ),
+        (
+            "observe",
+            {
+                "text": "주 대상을 검사 대상으로 지칭하고 사물 종류를 다시 추측하지 말라.",
+                "anomaly_seen": False,
+                "regions": [],
+                "features": [],
+            },
+        ),
+        (
+            "checklist",
+            {
+                "text": "checks의 여섯 항목을 모두 빠짐없이 boolean으로 적으라.",
+                "anomaly_seen": False,
+                "regions": [],
+                "features": [],
+                "checks": _checks(),
+            },
+        ),
+        (
+            "checklist",
+            {
+                "text": "점검 결과를 기록했습니다.",
+                "anomaly_seen": True,
+                "regions": ["tl"],
+                "features": ["하나라도 true이면 anomaly_seen=true"],
+                "checks": _checks("scratch"),
+            },
+        ),
+    ],
+)
+def test_prompt_meta_text_is_never_visual_evidence(
+    style: str, raw: dict
+) -> None:
+    result = _normalize_result(
+        raw,
+        style=style,
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["text"] == "판독 불가"
+    assert result["anomaly_seen"] is None
+    assert result["regions"] == []
+    assert result["features"] == []
+    if style == "baseline":
+        assert result["verdict"] == "ABSTAIN"
+        assert result["observations"] == []
+        assert result["abstain_reason"] == "validation_failure"
+
+
+@pytest.mark.parametrize(
+    "prompt_copy",
+    [
+        "점검 항목의 이름을 나열하는 것은 시각 근거가 아니다.",
+        (
+            "정상 참조와 다른 구체적 부위·형태·질감·"
+            "경계·패턴이 직접 보일 때만 해당 항목을 true로 적으라."
+        ),
+        "모든 항목을 일괄 true로 적지 마라.",
+    ],
+)
+def test_new_checklist_prompt_copy_is_never_visual_evidence(
+    prompt_copy: str,
+) -> None:
+    raw = {
+        "text": "점검 결과를 기록했습니다.",
+        "anomaly_seen": True,
+        "regions": ["tl"],
+        "features": [prompt_copy],
+        "checks": _checks("scratch"),
+    }
+
+    assert vision_backends._is_prompt_meta_text(prompt_copy) is True
+    result = _normalize_result(
+        raw,
+        style="checklist",
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["text"] == "판독 불가"
+    assert result["anomaly_seen"] is None
+    assert result["regions"] == []
+    assert result["features"] == []
+
+
+@pytest.mark.parametrize("style", ["observe", "checklist", "baseline"])
+def test_specific_korean_observation_survives_meta_guard(style: str) -> None:
+    text = "목 부위에 짧은 선형 흔적이 하나 보입니다."
+    raw = (
+        {"verdict": "REJECT", "defect_type": "scratch_neck", "observations": [text]}
+        if style == "baseline"
+        else {
+            "text": text,
+            "anomaly_seen": True,
+            "regions": ["tl"],
+            "features": ["짧은 선형 흔적"],
+        }
+    )
+    if style == "checklist":
+        raw["checks"] = _checks("scratch")
+
+    result = _normalize_result(
+        raw,
+        style=style,
+        model="test",
+        tokens=0,
+        usd=0.0,
+        item="screw",
+    )
+
+    assert result["text"] == text
+    assert result["anomaly_seen"] is True
+    if style == "baseline":
+        assert result["verdict"] == "REJECT"
+        assert result["observations"] == [text]
+
+
+@pytest.mark.parametrize("style", ["observe", "checklist", "baseline"])
+def test_vlm_prompt_has_typed_contract_without_value_placeholders(style: str) -> None:
+    prompt = vision_backends._prompt(
+        style,
+        item="screw",
+        region="full",
+        has_reference=False,
+        extra_context=None,
+    )
+
+    assert "한국어 관찰" not in prompt
+    assert '"색·형태·상대 크기 특징"' not in prompt
+    assert "JSON 객체" in prompt
+    if style in {"observe", "checklist"}:
+        assert "검사 품목은 screw이며 이미 확정" in prompt
+        assert "다른 사물명" in prompt
+    if style == "observe":
+        assert "구체적 차이가 없으면 anomaly_seen=false" in prompt
+        assert "직접 판독할 수 없을 때만 anomaly_seen=null" in prompt
+        assert all(word not in prompt for word in ("호박", "콩", "브러시"))
+    if style == "checklist":
+        assert "checks의 여섯 항목" in prompt
+        assert all(key in prompt for key in CHECKLIST_KEYS)
 
 
 @pytest.mark.parametrize(

@@ -4,6 +4,7 @@
 #
 # 이 실습에 필요한 텍스트·비전·임베딩 모델이 이미 받아져 있으면 그대로
 # 재사용하고(삭제·재다운로드 없음), 없는 모델만 새로 받는다.
+# 임베딩은 운영 기본값(nomic)과 R6 한국어 검색 비교용(bge-m3)을 구분한다.
 #
 # "모델이 이상하게 응답한다", "처음부터 깨끗하게 다시 세팅하고 싶다" 할 때는
 # OLLAMA_FORCE_REFRESH=1을 주면 기존 모델을 내리고/지운 뒤 새로 받는다.
@@ -16,21 +17,24 @@
 #   bash sh/setup_ollama.sh                                   # 있는 모델은 재사용, 없는 모델만 받기
 #   OLLAMA_FORCE_REFRESH=1 bash sh/setup_ollama.sh             # 기존 모델 삭제 후 깨끗하게 재구성
 #   OLLAMA_FAST_MODEL=qwen3:1.7b OLLAMA_QUALITY_MODEL=qwen3:14b bash sh/setup_ollama.sh   # 모델 바꿔서
+#   OLLAMA_RAG_COMPARE_EMBED_MODEL=bge-m3 bash sh/setup_ollama.sh                          # R6 비교 임베딩 재지정
 #
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 FAST_MODEL="${OLLAMA_FAST_MODEL:-qwen3:0.6b}"
+JUDGE_MODEL="${OLLAMA_JUDGE_MODEL:-qwen3:8b}"
 QUALITY_MODEL="${OLLAMA_QUALITY_MODEL:-qwen3:8b}"
 OBSERVER_MODEL="${VLM_OBSERVER_MODEL:-qwen2.5vl:3b}"
 CROSS_MODEL="${VLM_CROSS_MODEL:-qwen2.5vl:3b}"
 EMBED_MODEL="${OLLAMA_EMBED_MODEL:-nomic-embed-text}"
+RAG_COMPARE_EMBED_MODEL="${OLLAMA_RAG_COMPARE_EMBED_MODEL:-bge-m3}"
 FORCE_REFRESH="${OLLAMA_FORCE_REFRESH:-0}"
 
 # 동일한 비전 모델을 Observer/Cross-Checker가 공유하는 기본값에서는
 # 한 번만 확인·다운로드한다.
-MODELS=("$FAST_MODEL" "$QUALITY_MODEL")
-for candidate in "$OBSERVER_MODEL" "$CROSS_MODEL" "$EMBED_MODEL"; do
+MODELS=("$FAST_MODEL")
+for candidate in "$JUDGE_MODEL" "$QUALITY_MODEL" "$OBSERVER_MODEL" "$CROSS_MODEL" "$EMBED_MODEL" "$RAG_COMPARE_EMBED_MODEL"; do
     duplicate=0
     for model in "${MODELS[@]}"; do
         if [ "$candidate" = "$model" ]; then
@@ -44,7 +48,7 @@ done
 command -v ollama >/dev/null 2>&1 \
     || { echo "ERROR: ollama가 설치되어 있지 않습니다. https://ollama.com 에서 설치 후 재실행하세요."; exit 1; }
 
-echo "대상 모델: fast=$FAST_MODEL / quality=$QUALITY_MODEL / observer=$OBSERVER_MODEL / cross=$CROSS_MODEL / embed=$EMBED_MODEL"
+echo "대상 모델: fast=$FAST_MODEL / judge=$JUDGE_MODEL / quality=$QUALITY_MODEL / observer=$OBSERVER_MODEL / cross=$CROSS_MODEL / embed=$EMBED_MODEL / rag_compare_embed=$RAG_COMPARE_EMBED_MODEL"
 
 # ── 1) 기존 ollama serve 내리기 ─────────────────────────────────────────
 if curl -s --max-time 2 http://127.0.0.1:11434/api/tags >/dev/null 2>&1; then
@@ -99,9 +103,10 @@ echo
 cat <<EOF
 ################################################################
  Ollama 환경 준비 완료
- text: $FAST_MODEL / $QUALITY_MODEL
+ text: fast=$FAST_MODEL / judge=$JUDGE_MODEL / quality=$QUALITY_MODEL
  vision: $OBSERVER_MODEL / $CROSS_MODEL
  embed: $EMBED_MODEL
+ R6 RAG compare embed: $RAG_COMPARE_EMBED_MODEL
 ################################################################
 
 이제 ./sh/run_agent_ollma.sh 로 에이전트를 띄워 테스트할 수 있습니다.

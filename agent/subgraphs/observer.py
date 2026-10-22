@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from pathlib import Path
 from typing import Any
 
 from langsmith import traceable
@@ -13,9 +12,9 @@ from langsmith import traceable
 from agent.retry import with_retry
 from agent.state import AgentState
 from agent.nodes.common import _merge_usages, _vlm_result_usage
+from agent.vision.reference import normal_reference_path
 
 
-_ROOT_DIR = Path(__file__).resolve().parents[2]
 _DEFAULT_REGIONS = ("full", "tl", "tr", "bl", "br")
 _DECISION_WORDS = re.compile(
     r"불합격|불량|합격|\bdefect\b|\breject\b|\bpass\b",
@@ -54,11 +53,6 @@ def _regions_to_observe(state: AgentState, deps: Any) -> tuple[list[str], list[i
     return regions, initial_tasks
 
 
-def _reference_path(item: str) -> str | None:
-    path = _ROOT_DIR / "data" / "mvtec" / item / "train" / "good" / "000.png"
-    return str(path) if path.exists() else None
-
-
 def _filter_decision_words(text: str) -> tuple[str, list[str]]:
     """관찰문에서 판정에 해당하는 단어만 제거한다."""
     filtered_words = list(dict.fromkeys(
@@ -90,7 +84,7 @@ async def observer_node(state: AgentState, deps: Any) -> dict:
         }
 
     server = await deps.mcp.find_tool("inspect_image")
-    reference_path = _reference_path(state["item"])
+    reference_path = normal_reference_path(state["item"])
 
     async def observe_one(region: str) -> dict:
         result, retries = await with_retry(

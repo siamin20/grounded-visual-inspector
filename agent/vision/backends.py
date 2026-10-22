@@ -16,6 +16,7 @@ import io
 import json
 import os
 import re
+import unicodedata
 from abc import ABC, abstractmethod
 from functools import lru_cache
 from pathlib import Path
@@ -29,6 +30,7 @@ from agent.readability import is_unreadable_text
 from agent.typemap import load_type_map
 from agent.usage import MISSING, nonnegative_finite_float, nonnegative_int
 
+from .contracts import CHECKLIST_KEYS, normalized_checklist
 from .crop import REGIONS, crop_region, flip_h, unflip_regions
 
 
@@ -167,6 +169,114 @@ def _as_string_list(value: Any, *, allowed: set[str] | None = None) -> list[str]
 
 def _has_korean(text: str) -> bool:
     return bool(re.search(r"[ㄱ-ㆎ가-힣]", text))
+
+
+_PROMPT_META_MARKERS = (
+    "한국어관찰",
+    "색형태상대크기특징",
+    "이미지에서직접보이는구체적사실",
+    "이미지에서직접확인한대상위치색형태상대크기",
+    "실제로확인한색형태상대크기만",
+    "다른사물명으로바꾸",
+    "그차이를말할수없으면",
+    "예로확인한항목",
+    "주대상을검사대상으로지칭",
+    "구체적차이가없으면",
+    "직접판독할수없을때만",
+    "checks의여섯항목",
+    "하나라도true이면",
+    "모두false이면",
+    "true항목이있으면",
+    "추가키는금지",
+    "한국어완결문",
+    "필드설명",
+    "예시문구",
+    "지시문",
+)
+
+_PROMPT_META_MARKERS += (
+    "점검항목의이름을나열하는것은시각근거가아니다",
+    "정상참조와다른구체적부위형태질감경계패턴",
+    "모든항목을일괄true로적지마라",
+)
+
+
+def _is_prompt_meta_text(value: Any) -> bool:
+    """프롬프트의 예시·설명을 실제 시각 근거와 구분한다."""
+    if not isinstance(value, str):
+        return False
+    compact = re.sub(
+        r"[\W_]+",
+        "",
+        unicodedata.normalize("NFC", value).lower(),
+    )
+    return any(marker in compact for marker in _PROMPT_META_MARKERS)
+
+
+def _has_prompt_meta_evidence(raw: dict[str, Any], style: str) -> bool:
+    """관찰 필드 중 하나라도 메타 문구면 응답 전체를 보류한다."""
+    values: list[Any] = []
+    if style == "baseline":
+        observations = raw.get("observations")
+        if isinstance(observations, list):
+            values.extend(observations)
+        if isinstance(raw.get("text"), str):
+            values.append(raw["text"])
+    else:
+        values.append(raw.get("text"))
+    features = raw.get("features")
+    if isinstance(features, list):
+        values.extend(features)
+    return any(_is_prompt_meta_text(value) for value in values)
+
+
+def _validated_checklist_fields(
+    raw: dict[str, Any],
+) -> tuple[dict[str, bool], bool, list[str], list[str]] | None:
+    """Cross의 핵심 구조 필드만 교약을 검증한다.
+
+    ``text``는 서술용 요약이며 설계에서 결정로 만들 수 있다.
+    """
+    checks = normalized_checklist(raw.get("checks"))
+    raw_regions = raw.get("regions")
+    raw_features = raw.get("features")
+    strict_regions = (
+        isinstance(raw_regions, list)
+        and all(
+            isinstance(value, str)
+            and value.strip() == value
+            and value in REGIONS - {"full"}
+            for value in raw_regions
+        )
+    )
+    strict_features = (
+        isinstance(raw_features, list)
+        and all(
+            isinstance(value, str)
+            and bool(value.strip())
+            and value.strip() == value
+            for value in raw_features
+        )
+    )
+    expected_anomaly = any(checks.values()) if checks is not None else None
+    valid = (
+        checks is not None
+        and type(raw.get("anomaly_seen")) is bool
+        and raw["anomaly_seen"] is expected_anomaly
+        and strict_regions
+        and strict_features
+        and (
+            (expected_anomaly and bool(raw_regions) and bool(raw_features))
+            or (
+                expected_anomaly is False
+                and raw_regions == []
+                and raw_features == []
+            )
+        )
+    )
+    if not valid:
+        return None
+    return checks, bool(expected_anomaly), list(raw_regions), list(raw_features)
 
 
 def _language_text(raw: dict[str, Any], style: str) -> str:
@@ -383,7 +493,8 @@ def _result_usage(
 def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
                       tokens: int, usd: float,
                       item: str | None = None,
-                      usage: dict[str, Any] | None = None) -> dict[str, Any]:
+                      usage: dict[str, Any] | None = None,
+                      region: str | None = None) -> dict[str, Any]:
     result_usage = _result_usage(
         model=model,
         tokens=tokens,
@@ -423,12 +534,18 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
         observations = _as_string_list(raw_observations)
         if not observations and isinstance(raw.get("text"), str):
             observations = [raw["text"].strip()] if raw["text"].strip() else []
-        text = "\n".join(observations) or "판독 불가"
+        has_prompt_meta = _has_prompt_meta_evidence(raw, style)
+        text = "판독 불가" if has_prompt_meta else (
+            "\n".join(observations) or "판독 불가"
+        )
         allowed_types = {
             name for name in load_type_map().get(item or "", {}) if name != "good"
         }
         abstain_reason: str | None = None
         if not raw or invalid_defect_shape or invalid_observations_shape:
+            verdict = "ABSTAIN"
+            abstain_reason = "validation_failure"
+        elif has_prompt_meta:
             verdict = "ABSTAIN"
             abstain_reason = "validation_failure"
         elif not _as_string_list(raw_observations):
@@ -453,7 +570,9 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
             abstain_reason = "validation_failure"
         if verdict == "ABSTAIN":
             defect_type = None
-        features = _as_string_list(raw.get("features"))
+        if has_prompt_meta:
+            observations = []
+        features = [] if has_prompt_meta else _as_string_list(raw.get("features"))
         if not features and defect_type:
             features = [defect_type]
         return {
@@ -461,7 +580,11 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
             "anomaly_seen": (
                 None if verdict == "ABSTAIN" else verdict == "REJECT"
             ),
-            "regions": _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"}),
+            "regions": (
+                []
+                if has_prompt_meta
+                else _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"})
+            ),
             "features": features,
             **result_usage,
             "verdict": verdict,
@@ -471,10 +594,9 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
         }
 
     text = raw.get("text")
-    normalized_text = (
-        text.strip() if isinstance(text, str) and text.strip() else "판독 불가"
-    )
-    if is_unreadable_text(normalized_text) or not _has_korean(normalized_text):
+    has_text = isinstance(text, str) and bool(text.strip())
+    normalized_text = text.strip() if has_text else "판독 불가"
+    if _has_prompt_meta_evidence(raw, style):
         return {
             "text": "판독 불가",
             "anomaly_seen": None,
@@ -482,13 +604,80 @@ def _normalize_result(raw: dict[str, Any], *, style: str, model: str | None,
             "features": [],
             **result_usage,
         }
-    return {
+    checks: dict[str, bool] | None = None
+    summary_synthesized = False
+    if style == "checklist":
+        checklist_fields = _validated_checklist_fields(raw)
+        if checklist_fields is None:
+            return {
+                "text": "판독 불가",
+                "anomaly_seen": None,
+                "regions": [],
+                "features": [],
+                **result_usage,
+            }
+        checks, anomaly_seen, regions, features = checklist_fields
+        if not has_text:
+            summary_synthesized = True
+            normalized_text = (
+                "체크리스트의 여섯 항목에서 이상 신호가 보고되었습니다: "
+                + ", ".join(features)
+                if anomaly_seen else
+                "체크리스트의 여섯 항목에서 이상 신호가 보고되지 않았습니다."
+            )
+        elif is_unreadable_text(normalized_text) or not _has_korean(normalized_text):
+            return {
+                "text": "판독 불가",
+                "anomaly_seen": None,
+                "regions": [],
+                "features": [],
+                **result_usage,
+            }
+    else:
+        if is_unreadable_text(normalized_text) or not _has_korean(normalized_text):
+            return {
+                "text": "판독 불가",
+                "anomaly_seen": None,
+                "regions": [],
+                "features": [],
+                **result_usage,
+            }
+        anomaly_seen = _as_bool(raw.get("anomaly_seen"))
+        regions = _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"})
+        features = _as_string_list(raw.get("features"))
+    if style == "observe" and region not in {None, "full"}:
+        if anomaly_seen is True and regions != [region]:
+            return {
+                "text": "판독 불가",
+                "anomaly_seen": None,
+                "regions": [],
+                "features": [],
+                **result_usage,
+            }
+        if anomaly_seen is False:
+            regions = []
+    # 소형 VLM이 구체적 근거 없이 true만 출력하면 검색·판정에
+    # 가짜 양성이 전파된다. 양성은 위치와 시각 특징을 둘 다 제공한
+    # 경우만 판독 가능한 관찰로 채택한다.
+    if anomaly_seen is True and (not regions or not features):
+        return {
+            "text": "판독 불가",
+            "anomaly_seen": None,
+            "regions": [],
+            "features": [],
+            **result_usage,
+        }
+    result = {
         "text": normalized_text,
-        "anomaly_seen": _as_bool(raw.get("anomaly_seen")),
-        "regions": _as_string_list(raw.get("regions"), allowed=REGIONS - {"full"}),
-        "features": _as_string_list(raw.get("features")),
+        "anomaly_seen": anomaly_seen,
+        "regions": regions,
+        "features": features,
         **result_usage,
     }
+    if checks is not None:
+        result["checks"] = checks
+        result["summary_synthesized"] = summary_synthesized
+    return result
 
 
 def _prompt(style: str, *, item: str, region: str, has_reference: bool,
@@ -510,32 +699,61 @@ def _prompt(style: str, *, item: str, region: str, has_reference: bool,
             "정상이면 verdict=PASS, defect_type=null로 하고, 결함이면 "
             "verdict=REJECT와 목록 중 하나의 defect_type을 쓰라. "
             "이미지를 판독할 수 없으면 verdict=ABSTAIN, defect_type=null로 하라. "
-            "JSON 객체로만 응답하라: "
-            '{"verdict":"PASS|REJECT|ABSTAIN","defect_type":"결함 유형|null",'
-            '"observations":["눈으로 확인한 한국어 관찰"]}' + context
+            "JSON 객체로만 응답하라. 응답 계약은 "
+            "verdict: enum(PASS, REJECT, ABSTAIN), defect_type: string|null, "
+            "observations: array<string>(최소 1개)이다. "
+            "observations에는 이미지에서 직접 확인한 대상·위치·색·형태·"
+            "상대 크기의 구체적 사실만 한국어 완결문으로 적으라. "
+            "예시, 필드 설명, 지시문을 값으로 복사하지 마라." + context
         )
 
     location_note = (
-        f"현재 입력은 전체 이미지의 {region} 영역이므로 regions에는 "
-        f"관찰 위치를 {region}으로 적으라. "
+        f"현재 입력은 전체 이미지의 {region} 영역이므로 양성일 때만 regions에 "
+        f"관찰 위치를 {region}으로 하나만 적으라. 음성이면 빈 배열로 적으라. "
         if region != "full" else
         "위치는 tl, tr, bl, br, center 중 해당하는 값으로 적으라. "
     )
     schema = (
-        'JSON 객체로만 응답하라: {"text":"한국어 관찰",'
-        '"anomaly_seen":true|false|null,"regions":["tl|tr|bl|br|center"],'
-        '"features":["색·형태·상대 크기 특징"]}. '
+        "JSON 객체로만 응답하라. 응답 계약은 text: string, "
+        "anomaly_seen: boolean|null, regions: array<enum(tl, tr, bl, br, center)>, "
+        "features: array<string>이다. text에는 이미지에서 직접 보이는 "
+        "구체적 사실을 한국어 완결문으로 적고, features에는 실제로 "
+        "확인한 색·형태·상대 크기만 적으라. 예시, 필드 설명, "
+        "지시문을 값으로 복사하지 마라. "
     )
     if style == "observe":
         instruction = (
+            f"검사 품목은 {item}이며 이미 확정됐으므로 다른 사물명으로 바꾸어 추측하지 말라. "
+            "주 대상을 '검사 대상'으로 지칭하고 사물 종류를 다시 추측하지 말라. "
             "합격·불합격이나 결함 유형을 판정하지 말고 눈에 보이는 것만 기술하라. "
             "색, 형태, 그리고 부품 대비 상대 크기를 적으라. "
+            "정상 참조와 비교해 구체적 차이가 없으면 anomaly_seen=false로 적으라. "
+            "anomaly_seen=true라면 text와 features에 부위·형태·주변과의 "
+            "차이를 최소 하나 구체적으로 적으라. 대상이 없거나 흐림·가림 등으로 "
+            "직접 판독할 수 없을 때만 anomaly_seen=null로 적으라. "
         )
     elif style == "checklist":
+        checklist_keys = ", ".join(CHECKLIST_KEYS)
         instruction = (
-            "text에 다음 항목을 각각 예 또는 아니오로 확인하라: 긁힘, "
-            "깨짐·균열, 이물·오염, 변색, 휨·변형, 나사산 손상. "
+            f"검사 품목은 {item}이며 이미 확정됐으므로 다른 사물명으로 바꾸지 말라. "
+            "긁힘, 깨짐·균열, 이물·오염, 변색, 휨·변형, 나사산 손상을 각각 확인하라. "
+            "점검 항목의 이름을 나열하는 것은 시각 근거가 아니다. 정상 참조와 다른 "
+            "구체적 부위·형태·질감·경계·패턴이 직접 보일 때만 해당 항목을 true로 "
+            "적고, 근거가 없으면 false로 적으라. 모든 항목을 일괄 true로 적지 마라. "
+            "checks의 여섯 항목을 모두 빠짐없이 boolean으로 적고, 하나라도 true이면 "
+            "anomaly_seen=true, 모두 false이면 anomaly_seen=false로 적으라. "
+            "true 항목이 있으면 그 부위와 시각 특징을 regions와 features에 적고, "
+            "모두 false이면 regions와 features를 빈 배열로 적으라. "
+            "판독 불가이면 anomaly_seen=null로 적고 checks를 넣지 말라. "
             "합격·불합격은 판정하지 말라. "
+        )
+        schema = (
+            "JSON 객체로만 응답하라. 응답 계약은 text: string, "
+            "anomaly_seen: boolean|null, regions: array<enum(tl, tr, bl, br, center)>, "
+            "features: array<string>, checks: object이다. "
+            f"checks의 키는 정확히 {checklist_keys}이고 추가 키는 금지한다. "
+            "text에는 각 확인 결과와 이미지에서 직접 보이는 구체적 사실만 한국어 "
+            "완결문으로 적으라. 예시, 필드 설명, 지시문을 값으로 복사하지 마라. "
         )
     else:
         raise ValueError(f"지원하지 않는 VLM style입니다: {style}")
@@ -563,6 +781,8 @@ class VLMBackend(ABC):
     async def observe(self, image_path: str, *, item: str, region: str, style: str,
                       flip: bool, reference_path: str | None,
                       extra_context: str | None = None) -> dict[str, Any]:
+        if item not in load_type_map():
+            raise ValueError(f"지원하지 않는 검사 품목입니다: {item}")
         if region not in REGIONS:
             raise ValueError(f"지원하지 않는 이미지 영역입니다: {region}")
         if style not in {"observe", "checklist", "baseline"}:
@@ -577,7 +797,15 @@ class VLMBackend(ABC):
 
         content, usage = await self._request(prompt, images)
         raw = _parse_json(content)
-        if not _has_korean(_language_text(raw, style)):
+        checklist_without_text = (
+            style == "checklist"
+            and _validated_checklist_fields(raw) is not None
+            and not (
+                isinstance(raw.get("text"), str)
+                and bool(raw["text"].strip())
+            )
+        )
+        if not checklist_without_text and not _has_korean(_language_text(raw, style)):
             retry_prompt = (
                 prompt
                 + "\n\n이전 응답의 관찰문이 한국어가 아니었다. "
@@ -595,6 +823,7 @@ class VLMBackend(ABC):
             usd=usage.get("usd", 0.0),
             item=item,
             usage=usage,
+            region=region,
         )
 
 
@@ -658,6 +887,8 @@ class FakeVLM(VLMBackend):
                       flip: bool, reference_path: str | None,
                       extra_context: str | None = None) -> dict[str, Any]:
         del reference_path, extra_context
+        if item not in load_type_map():
+            raise ValueError(f"지원하지 않는 검사 품목입니다: {item}")
         if region not in REGIONS:
             raise ValueError(f"지원하지 않는 이미지 영역입니다: {region}")
         if style not in {"observe", "checklist", "baseline"}:
@@ -709,7 +940,9 @@ class FakeVLM(VLMBackend):
             )
             anomaly_seen = False
             regions: list[str] = []
-            features: list[str] = ["균일한 윤곽", "일관된 표면"]
+            features: list[str] = [] if style == "checklist" else [
+                "균일한 윤곽", "일관된 표면",
+            ]
         else:
             observation, features = _FAKE_OBSERVATIONS.get(
                 defect_type,
@@ -733,6 +966,24 @@ class FakeVLM(VLMBackend):
             "features": features,
             **usage,
         }
+        if style == "checklist":
+            checks = {key: False for key in CHECKLIST_KEYS}
+            if anomaly_seen:
+                if defect_type.startswith("scratch") or defect_type == "scratch":
+                    checks["scratch"] = True
+                elif defect_type.startswith("broken") or defect_type in {
+                    "crack", "cut", "hole",
+                }:
+                    checks["break_or_crack"] = True
+                elif defect_type == "contamination":
+                    checks["contamination"] = True
+                elif defect_type in {"color", "print"}:
+                    checks["discoloration"] = True
+                elif defect_type == "bent":
+                    checks["bend_or_deformation"] = True
+                elif defect_type.startswith("thread"):
+                    checks["thread_damage"] = True
+            result["checks"] = checks
         if style == "baseline":
             result.update({
                 "verdict": "REJECT" if anomaly_seen else "PASS",

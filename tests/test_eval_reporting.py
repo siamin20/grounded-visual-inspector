@@ -83,7 +83,40 @@ def _row(condition: str, sample_id: str, *, defect: bool) -> dict[str, object]:
         "observed_model_response_count": 1,
         "validation_errors_first": [],
         "would_fail": [],
-        "observations_text": [observation],
+        "observer_status": "O+" if defect else "O-",
+        "cross_status": "C+" if defect else "C-",
+        "observations": [{
+            "call_id": "obs-full",
+            "region": "full",
+            "text": observation,
+            "anomaly_seen": defect,
+            "regions": ["tl"] if defect else [],
+            "features": ["연속적인 선형 흔적"] if defect else ["균일한 표면"],
+            "model": "openai:model-response",
+        }],
+        "cross_check": {
+            "call_id": "cc-full",
+            "summary": observation,
+            "anomaly_seen": defect,
+            "regions": ["tl"] if defect else [],
+            "features": ["연속적인 선형 흔적"] if defect else [],
+            "model": "openai:model-response",
+        },
+        "observations_text": observation,
+        "rag_query_text": observation,
+        "spec_hits": [],
+        "judgement": {
+            "violations": ["SCREW-04"] if defect else [],
+            "defect_type": "scratch_neck" if defect else None,
+            "rationale": "관찰과 조항 비교 결과",
+            "status": "grounded" if defect else "none",
+        },
+        "judgement_corrected": False,
+        "raw_judgement": {
+            "violations": ["SCREW-04"] if defect else [],
+            "defect_type": "scratch_neck" if defect else None,
+            "rationale": "관찰과 조항 비교 결과",
+        },
         "report": {
             "summary": "검사 결과입니다.",
             "observations": [{"text": observation, "source_call_id": "obs-full"}],
@@ -279,6 +312,18 @@ def _verified_run(
         if usage_unknown_last and condition_index == len(executed) - 1:
             rows[-1]["usage_status"] = "unknown_after_error"
             rows[-1]["error"] = "RuntimeError: provider usage unavailable"
+            rows[-1].update({
+                "observer_status": None,
+                "cross_status": None,
+                "observations": [],
+                "cross_check": {},
+                "observations_text": "",
+                "rag_query_text": "",
+                "spec_hits": [],
+                "judgement": {},
+                "judgement_corrected": False,
+                "raw_judgement": {},
+            })
         rows = [
             {key: row[key] for key in REQUIRED_RESULT_ROW_KEYS}
             for row in rows

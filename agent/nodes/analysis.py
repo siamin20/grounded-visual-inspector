@@ -71,17 +71,21 @@ async def analysis_node(state: AgentState, deps: SupervisorDeps) -> dict:
                 "insufficient_visual_evidence"
             )
     elif observer == "O+" and cross == "C+" and judged == "V+":
-        verdict = "REJECT"
-        confidence = "high" if positive_overlap else "low"
-        defect_type = judgement.get("defect_type")
-        abstain_reason = None
+        if positive_overlap:
+            verdict, confidence = "REJECT", "high"
+            defect_type = judgement.get("defect_type")
+            abstain_reason = None
+        else:
+            verdict, confidence, defect_type, abstain_reason = _abstain(
+                "evidence_conflict"
+            )
     elif judged == "V+" and (
         (observer == "O+" and cross in {"C-", "C?"})
         or (observer in {"O?", "O-"} and cross == "C+")
     ):
-        verdict, confidence = "REJECT", "low"
-        defect_type = judgement.get("defect_type")
-        abstain_reason = None
+        verdict, confidence, defect_type, abstain_reason = _abstain(
+            "evidence_conflict"
+        )
     elif judged == "V0" and (observer == "O+" or cross == "C+"):
         verdict, confidence, defect_type, abstain_reason = _abstain(
             "ungrounded_anomaly"

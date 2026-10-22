@@ -80,11 +80,22 @@ def _build_llms():
     """LLM_BACKEND=fake(기본, 결정론) | ollama(로컬 실모델) | openai(실제 OpenAI API)."""
     backend = os.environ.get("LLM_BACKEND", "fake").strip().lower()
     if backend == "ollama":
-        from agent.ollama_llm import OllamaFastLLM, OllamaQualityLLM
+        from agent.ollama_llm import (
+            OllamaFastLLM,
+            OllamaJudgeLLM,
+            OllamaQualityLLM,
+        )
         fast = OllamaFastLLM(os.environ.get("OLLAMA_FAST_MODEL", "qwen3:0.6b"),
                              usd_per_1k_tokens=0.00015)
+        judge = OllamaJudgeLLM(
+            os.environ.get("OLLAMA_JUDGE_MODEL", "qwen3:8b"),
+            usd_per_1k_tokens=0.005,
+        )
         quality = OllamaQualityLLM(os.environ.get("OLLAMA_QUALITY_MODEL", "qwen3:8b"),
                                    usd_per_1k_tokens=0.005)
+        # eval/run_eval.py도 사용하는 기존 3-tuple을 유지한다.
+        # SupervisorDeps.__post_init__이 이 전담 의존성을 명시 필드로 옮긴다.
+        fast.judge_llm = judge
         return backend, fast, quality
     if backend == "openai":
         from agent.openai_llm import OpenAIFastLLM, OpenAIQualityLLM
@@ -196,6 +207,7 @@ async def health():
             "hitl_mode": app.state.deps.hitl_mode,
             "ablation": app.state.deps.ablation,
             "fast_llm": app.state.deps.fast_llm.name,
+            "judge_llm": app.state.deps.judge_llm.name,
             "quality_llm": app.state.deps.quality_llm.name}
 
 

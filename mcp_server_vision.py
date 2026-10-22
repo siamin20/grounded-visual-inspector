@@ -28,6 +28,10 @@ class InspectResult(BaseModel):
     anomaly_seen: bool | None = Field(description="이상 징후 관찰 여부")
     regions: list[str] = Field(default_factory=list, description="이상이 관찰된 영역")
     features: list[str] = Field(default_factory=list, description="관찰된 시각 특징")
+    checks: dict[str, bool] | None = Field(
+        default=None,
+        description="checklist 응답의 6개 구조화 점검 결과",
+    )
     model: str | None = Field(
         default=None,
         description="provider 응답에서 관찰된 실제 모델 ID",
@@ -124,6 +128,8 @@ class InspectResult(BaseModel):
         if not any(data[key] is not None for key in baseline_keys):
             for key in baseline_keys:
                 del data[key]
+        if data["checks"] is None:
+            del data["checks"]
         return data
 
 
@@ -161,6 +167,7 @@ async def inspect_image(
         anomaly_seen=result.get("anomaly_seen"),
         regions=result.get("regions", []),
         features=result.get("features", []),
+        checks=result.get("checks"),
         model=result.get("model"),
         tokens=result["tokens"],
         usd=result["usd"],

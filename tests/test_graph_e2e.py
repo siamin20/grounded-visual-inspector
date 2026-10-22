@@ -46,8 +46,10 @@ class GraphMCP:
         else:
             text = "표면과 윤곽에서 눈에 띄는 이상이 보이지 않습니다."
             regions = []
-            features = ["정상 윤곽"]
-        return {
+            features = (
+                [] if arguments["style"] == "checklist" else ["정상 윤곽"]
+            )
+        result = {
             "text": text,
             "anomaly_seen": defective,
             "regions": regions,
@@ -58,6 +60,16 @@ class GraphMCP:
             "region": arguments["region"],
             "flip": arguments["flip"],
         }
+        if arguments["style"] == "checklist":
+            result["checks"] = {
+                "scratch": defective,
+                "break_or_crack": False,
+                "contamination": False,
+                "discoloration": False,
+                "bend_or_deformation": False,
+                "thread_damage": False,
+            }
+        return result
 
     async def find_resource_template(self, name: str) -> tuple[str, str]:
         assert name == "get_guide"

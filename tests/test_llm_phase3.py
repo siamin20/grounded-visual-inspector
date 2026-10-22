@@ -1,5 +1,6 @@
 """Phase 3 제품 검사용 텍스트 LLM 인터페이스 검증."""
 
+import asyncio
 import json
 from pathlib import Path
 
@@ -7,9 +8,13 @@ import pytest
 
 from agent import ollama_llm as ollama_backend
 from agent import openai_llm as openai_backend
+from agent.deps import SupervisorDeps
 from agent.fake_llm import FastLLM, QualityLLM
 from agent.ollama_llm import (
     OllamaFastLLM,
+    OllamaJudgeLLM,
+    OllamaQualityLLM,
+    JUDGE_SCHEMA,
     _normalize_judgement as normalize_ollama_judgement,
 )
 from agent.openai_llm import (
@@ -149,20 +154,34 @@ def test_openai_usage_does_not_invent_missing_observed_model(
 def test_ollama_usage_separates_compute_proxy_from_estimated_cost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("OLLAMA_FAST_NUM_PREDICT", raising=False)
     llm = OllamaFastLLM("requested", 0.2)
+    called = {}
+
+    def fake_post(*args, **kwargs):
+        called["args"] = args
+        called["kwargs"] = kwargs
+        return _HTTPResponse({
+            "model": "resolved:latest",
+            "message": {"content": "{}"},
+            "done": True,
+            "prompt_eval_count": 4,
+            "eval_count": 6,
+        })
+
     monkeypatch.setattr(
         ollama_backend.httpx,
         "post",
-        lambda *args, **kwargs: _HTTPResponse({
-            "model": "resolved:latest",
-            "message": {"content": "{}"},
-            "prompt_eval_count": 4,
-            "eval_count": 6,
-        }),
+        fake_post,
     )
 
     _, usage = llm._chat("system", "user")
 
+    assert called["kwargs"]["json"]["think"] is False
+    assert called["kwargs"]["json"]["options"] == {
+        "temperature": 0.0,
+        "num_predict": 512,
+    }
     assert usage == {
         "model": "ollama:requested",
         "tokens": 10,
@@ -185,6 +204,8 @@ def test_ollama_usage_separates_compute_proxy_from_estimated_cost(
 async def test_ollama_stream_usage_uses_final_counts_and_response_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.delenv("OLLAMA_FAST_NUM_PREDICT", raising=False)
+    called = {}
     lines = [
         json.dumps({
             "model": "resolved:latest",
@@ -221,7 +242,9 @@ async def test_ollama_stream_usage_uses_final_counts_and_response_model(
         async def __aexit__(self, *_args):
             return None
 
-        def stream(self, *_args, **_kwargs):
+        def stream(self, *args, **kwargs):
+            called["args"] = args
+            called["kwargs"] = kwargs
             return StreamResponse()
 
     monkeypatch.setattr(
@@ -233,12 +256,326 @@ async def test_ollama_stream_usage_uses_final_counts_and_response_model(
 
     content, usage = await llm._chat_stream("system", "user")
 
+    assert called["kwargs"]["json"]["think"] is False
+    assert called["kwargs"]["json"]["options"] == {
+        "temperature": 0.0,
+        "num_predict": 512,
+    }
     assert content == "안녕"
     assert usage["input_tokens"] == 5
     assert usage["output_tokens"] == 2
     assert usage["tokens"] == 7
     assert usage["observed_model"] == "ollama:resolved:latest"
     assert usage["successful_provider_requests"] == 1
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc"])
+def test_ollama_num_predict_must_be_positive_integer(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("OLLAMA_FAST_NUM_PREDICT", value)
+
+    with pytest.raises(ValueError, match="OLLAMA_FAST_NUM_PREDICT"):
+        OllamaFastLLM("requested", 0.0)
+
+
+def test_ollama_quality_has_separate_output_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OLLAMA_QUALITY_NUM_PREDICT", raising=False)
+
+    assert OllamaQualityLLM("requested", 0.0).num_predict == 2048
+
+
+def test_ollama_judge_has_separate_bounded_output_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("OLLAMA_JUDGE_NUM_PREDICT", raising=False)
+
+    assert OllamaJudgeLLM("requested", 0.0).num_predict == 512
+    assert JUDGE_SCHEMA["properties"]["rationale"]["maxLength"] == 240
+    assert JUDGE_SCHEMA["properties"]["violations"]["maxItems"] == 3
+    assert JUDGE_SCHEMA["additionalProperties"] is False
+
+
+def test_ollama_judge_uses_short_rationale_contract(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = OllamaJudgeLLM("requested", 0.0)
+    captured = {}
+
+    def fake_chat(system, user, *, schema):
+        captured.update(system=system, user=user, schema=schema)
+        return json.dumps({
+            "violations": ["SCREW-04"],
+            "defect_type": "scratch_neck",
+            "rationale": "관찰문과 조항이 일치합니다.",
+        }), {"model": llm.name, "tokens": 1, "usd": 0.0}
+
+    monkeypatch.setattr(llm, "_chat", fake_chat)
+
+    result, _ = llm.judge("목 부위에 긁힘", CLAUSES, "screw")
+
+    assert result["violations"] == ["SCREW-04"]
+    assert "160자 이내의 한 문장" in captured["system"]
+    assert "defect_type=good" in captured["system"]
+    assert captured["schema"] is JUDGE_SCHEMA
+
+
+def test_supervisor_deps_promotes_dedicated_judge_or_falls_back() -> None:
+    fast = OllamaFastLLM("fast", 0.0)
+    judge = OllamaJudgeLLM("judge", 0.0)
+    fast.judge_llm = judge
+    dedicated = SupervisorDeps(
+        fast_llm=fast,
+        quality_llm=object(),
+        mcp=object(),
+        session_store=object(),
+        version="v2",
+    )
+    assert dedicated.judge_llm is judge
+
+    fallback_fast = OllamaFastLLM("fallback", 0.0)
+    fallback = SupervisorDeps(
+        fast_llm=fallback_fast,
+        quality_llm=object(),
+        mcp=object(),
+        session_store=object(),
+        version="v2",
+    )
+    assert fallback.judge_llm is fallback_fast
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc"])
+def test_ollama_judge_num_predict_must_be_positive_integer(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("OLLAMA_JUDGE_NUM_PREDICT", value)
+
+    with pytest.raises(ValueError, match="OLLAMA_JUDGE_NUM_PREDICT"):
+        OllamaJudgeLLM("requested", 0.0)
+
+
+@pytest.mark.asyncio
+async def test_ollama_quality_stream_sends_its_limit_and_disables_thinking(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    called = {}
+    lines = [json.dumps({
+        "model": "resolved:latest",
+        "message": {"content": "{}"},
+        "done": True,
+        "prompt_eval_count": 3,
+        "eval_count": 1,
+    })]
+
+    class StreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+    class AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, *args, **kwargs):
+            called["args"] = args
+            called["kwargs"] = kwargs
+            return StreamResponse()
+
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "AsyncClient",
+        lambda **_kwargs: AsyncClient(),
+    )
+    llm = OllamaQualityLLM("requested", 0.0)
+
+    await llm._chat_stream("system", "user")
+
+    payload = called["kwargs"]["json"]
+    assert payload["think"] is False
+    assert payload["options"] == {
+        "temperature": 0.0,
+        "num_predict": 2048,
+    }
+
+
+def test_ollama_sync_rejects_length_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = OllamaFastLLM("requested", 0.0)
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "post",
+        lambda *args, **kwargs: _HTTPResponse({
+            "model": "resolved:latest",
+            "message": {"content": '{"route":"chat"'},
+            "done": True,
+            "done_reason": "length",
+        }),
+    )
+
+    with pytest.raises(RuntimeError, match="출력 토큰 상한"):
+        llm._chat("system", "user")
+
+
+def test_ollama_sync_requires_done_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    llm = OllamaFastLLM("requested", 0.0)
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "post",
+        lambda *args, **kwargs: _HTTPResponse({
+            "model": "resolved:latest",
+            "message": {"content": '{"route":"chat"}'},
+            "done": False,
+        }),
+    )
+
+    with pytest.raises(RuntimeError, match="완료 기록"):
+        llm._chat("system", "user")
+
+
+@pytest.mark.asyncio
+async def test_ollama_stream_rejects_length_truncation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    lines = [json.dumps({
+        "model": "resolved:latest",
+        "message": {"content": "{"},
+        "done": True,
+        "done_reason": "length",
+    })]
+
+    class StreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            for line in lines:
+                yield line
+
+    class AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, *_args, **_kwargs):
+            return StreamResponse()
+
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "AsyncClient",
+        lambda **_kwargs: AsyncClient(),
+    )
+    llm = OllamaFastLLM("requested", 0.0)
+
+    with pytest.raises(RuntimeError, match="출력 토큰 상한"):
+        await llm._chat_stream("system", "user")
+
+
+@pytest.mark.asyncio
+async def test_ollama_stream_requires_done_record(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class StreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            yield json.dumps({
+                "model": "resolved:latest",
+                "message": {"content": "부분"},
+                "done": False,
+            })
+
+    class AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, *_args, **_kwargs):
+            return StreamResponse()
+
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "AsyncClient",
+        lambda **_kwargs: AsyncClient(),
+    )
+    llm = OllamaFastLLM("requested", 0.0)
+
+    with pytest.raises(RuntimeError, match="완료 기록 없이"):
+        await llm._chat_stream("system", "user")
+
+
+@pytest.mark.asyncio
+async def test_ollama_stream_has_total_wall_clock_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OLLAMA_LLM_WALL_TIMEOUT_S", "0.01")
+
+    class StreamResponse:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def raise_for_status(self) -> None:
+            return None
+
+        async def aiter_lines(self):
+            await asyncio.sleep(1)
+            yield ""
+
+    class AsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args):
+            return None
+
+        def stream(self, *_args, **_kwargs):
+            return StreamResponse()
+
+    monkeypatch.setattr(
+        ollama_backend.httpx,
+        "AsyncClient",
+        lambda **_kwargs: AsyncClient(),
+    )
+    llm = OllamaFastLLM("requested", 0.0)
+
+    with pytest.raises(RuntimeError, match="전체 제한"):
+        await llm._chat_stream("system", "user")
 
 
 def test_fake_judge_does_not_confuse_color_with_scratch_common_words():

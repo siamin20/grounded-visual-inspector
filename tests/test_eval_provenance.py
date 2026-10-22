@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from eval.provenance import (
+    LEGACY_RESULT_ROW_KEYS_V2,
     ProvenanceError,
     atomic_write_json,
     build_run_manifest,
@@ -19,8 +20,10 @@ from eval.provenance import (
     join_run_manifest,
     load_run_manifest,
     new_run_id,
+    pause_condition,
     record_condition_progress,
     record_condition_setup_usage,
+    resume_condition,
     sha256_file,
     sha256_tree,
     start_condition as _start_condition,
@@ -122,6 +125,7 @@ def _manifest(
     dry_run: bool = False,
     backends: dict[str, str] | None = None,
     models: dict[str, str] | None = None,
+    settings: dict | None = None,
     budget: object = 15.0,
 ) -> dict:
     return build_run_manifest(
@@ -146,10 +150,40 @@ def _manifest(
             "vlm_observer": "gpt-vision",
             "embed": "embedding-model",
         },
-        settings={"temperature": 0},
+        settings=settings or {"temperature": 0},
         pricing={"mode": "estimated", "version": "2026-10-21"},
         created_at="2026-10-21T12:00:00Z",
     )
+
+
+def _legacy_v2_manifest(manifest: dict) -> dict:
+    """기존 schema v2 서명을 보존한 회귀 테스트용 manifest를 만든다."""
+    legacy = json.loads(json.dumps(manifest))
+    legacy["schema_version"] = 2
+    immutable_keys = (
+        "schema_version",
+        "run_id",
+        "split",
+        "dry_run",
+        "planned_conditions",
+        "seed",
+        "expected_n",
+        "suite_budget_estimated_usd",
+        "backends",
+        "models",
+        "settings",
+        "pricing",
+        "repository",
+        "artifacts",
+        "runtime",
+    )
+    legacy["immutable_sha256"] = canonical_sha256(
+        {key: legacy[key] for key in immutable_keys}
+    )
+    unsigned = dict(legacy)
+    unsigned.pop("manifest_sha256", None)
+    legacy["manifest_sha256"] = canonical_sha256(unsigned)
+    return legacy
 
 
 def _create_run(
@@ -180,6 +214,7 @@ def _write_condition_outputs(
     result_path = run_dir / (result_name or f"{condition}_dev.jsonl")
     rows = []
     fake = manifest["backends"]["llm"] == "fake" and manifest["backends"]["vlm"] == "fake"
+    after = condition not in {"B0", "B1"}
     for index in range(processed):
         rows.append({
             "run_id": manifest["run_id"],
@@ -207,7 +242,48 @@ def _write_condition_outputs(
             "observed_model_response_count": 0 if fake else 1,
             "validation_errors_first": [],
             "would_fail": [],
+            "observer_status": "O-" if after else None,
+            "cross_status": "C-" if after else None,
+            "observations": [{
+                "call_id": "obs-full",
+                "region": "full",
+                "text": "이상 없음",
+                "anomaly_seen": False,
+                "regions": [],
+                "features": ["균일한 윤곽"],
+                "model": "openai:response-model-1",
+            }] if after else [],
+            "cross_check": {
+                "call_id": "cc-full",
+                "summary": "이상 없음",
+                "anomaly_seen": False,
+                "regions": [],
+                "features": [],
+                "checks": {
+                    "scratch": False,
+                    "break_or_crack": False,
+                    "contamination": False,
+                    "discoloration": False,
+                    "bend_or_deformation": False,
+                    "thread_damage": False,
+                },
+                "model": "openai:response-model-1",
+            } if after else {},
             "observations_text": "이상 없음",
+            "rag_query_text": "이상 없음" if after else "",
+            "spec_hits": [],
+            "judgement": {
+                "violations": [],
+                "defect_type": None,
+                "rationale": "위반 없음",
+                "status": "none",
+            } if after else {},
+            "judgement_corrected": False,
+            "raw_judgement": {
+                "violations": [],
+                "defect_type": None,
+                "rationale": "위반 없음",
+            } if after else {},
             "pre_validation_snapshot": {},
             "report": {"verdict": "PASS"},
             "latency_s": 0.1,
@@ -224,6 +300,11 @@ def _write_condition_outputs(
             "usage_status": "fake_estimate_no_billing" if fake else "known_split",
             "error": None,
         })
+    if manifest["schema_version"] == 2:
+        rows = [
+            {key: row[key] for key in LEGACY_RESULT_ROW_KEYS_V2}
+            for row in rows
+        ]
     result_path.write_text(
         "".join(json.dumps(row) + "\n" for row in rows),
         encoding="utf-8",
@@ -291,9 +372,14 @@ def _rebind_output_hash(
     path: Path,
 ) -> None:
     """산출물과 manifest hash를 함께 바꾼 내부 불일치 위조를 만든다."""
-    manifest_path = run_dir / "manifest.json"
     payload = load_run_manifest(run_dir)
     payload["conditions"][condition][key]["sha256"] = sha256_file(path)
+    _write_resigned_manifest(run_dir, payload)
+
+
+def _write_resigned_manifest(run_dir: Path, payload: dict) -> None:
+    """test용 변조가 단순 manifest hash 오류에서 멈추지 않게 한다."""
+    manifest_path = run_dir / "manifest.json"
     unsigned = dict(payload)
     unsigned.pop("manifest_sha256", None)
     payload["manifest_sha256"] = canonical_sha256(unsigned)
@@ -415,6 +501,184 @@ def test_suite_lifecycle_progress_and_duplicate_condition_are_fail_closed(
         start_condition(run_dir, manifest, condition="B0")
 
 
+def test_paused_checkpoint_requires_exact_roster_prefix(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    root, provenance = synthetic_repository
+    run_dir, manifest = _create_run(
+        tmp_path,
+        provenance,
+        planned_conditions=("B0", "A"),
+    )
+    start_condition(
+        run_dir,
+        manifest,
+        condition="B0",
+        started_at="2026-10-21T12:01:00Z",
+    )
+    record_condition_progress(
+        run_dir,
+        condition="B0",
+        processed_samples=1,
+        estimated_spend_usd=0.0,
+    )
+    result_path, summary_path = _write_condition_outputs(
+        run_dir,
+        manifest,
+        "B0",
+        complete_capture=False,
+    )
+    summary_path.unlink()
+    paused = pause_condition(
+        run_dir,
+        condition="B0",
+        result_path=result_path,
+        observed_model_ids=["openai:response-model-1"],
+    )
+
+    assert paused["status"] == "paused"
+    assert paused["conditions"]["B0"]["pause_reason"] == "batch_limit"
+    assert paused["conditions"]["B0"]["checkpoint_count"] == 1
+    with pytest.raises(ProvenanceError, match="선행 조건"):
+        start_condition(run_dir, manifest, condition="A")
+
+    wrong_reason = json.loads(json.dumps(paused))
+    wrong_reason["conditions"]["B0"]["pause_reason"] = "interrupt"
+    _write_resigned_manifest(run_dir, wrong_reason)
+    with pytest.raises(ProvenanceError, match="pause_reason"):
+        load_run_manifest(run_dir)
+
+    missing_count = json.loads(json.dumps(paused))
+    missing_count["conditions"]["B0"].pop("checkpoint_count")
+    _write_resigned_manifest(run_dir, missing_count)
+    with pytest.raises(ProvenanceError, match="checkpoint_count"):
+        load_run_manifest(run_dir)
+
+    _write_resigned_manifest(run_dir, paused)
+    verified = verify_run_manifest(
+        run_dir,
+        require_complete=False,
+        repo_root=root,
+        verify_inputs=True,
+    )
+    assert verified["conditions"]["B0"]["status"] == "paused"
+    with pytest.raises(ProvenanceError, match="완료"):
+        verify_run_manifest(run_dir, require_complete=True)
+
+    row = json.loads(result_path.read_text(encoding="utf-8"))
+    row["id"] = "dev-2"
+    result_path.write_text(json.dumps(row) + "\n", encoding="utf-8")
+    _rebind_output_hash(
+        run_dir,
+        condition="B0",
+        key="checkpoint_result",
+        path=result_path,
+    )
+    with pytest.raises(ProvenanceError, match="prefix"):
+        verify_run_manifest(
+            run_dir,
+            require_complete=False,
+            repo_root=root,
+            verify_inputs=True,
+        )
+
+
+def test_resume_condition_rejects_changed_immutable_manifest(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(tmp_path, provenance)
+    start_condition(run_dir, manifest, condition="B0")
+    record_condition_progress(
+        run_dir,
+        condition="B0",
+        processed_samples=1,
+        estimated_spend_usd=0.0,
+    )
+    result_path, summary_path = _write_condition_outputs(
+        run_dir,
+        manifest,
+        "B0",
+        complete_capture=False,
+    )
+    summary_path.unlink()
+    pause_condition(
+        run_dir,
+        condition="B0",
+        result_path=result_path,
+        observed_model_ids=["openai:response-model-1"],
+    )
+    changed = _manifest(
+        provenance,
+        budget=14.0,
+    )
+
+    with pytest.raises(ProvenanceError, match="불변 설정"):
+        resume_condition(run_dir, changed, condition="B0")
+
+
+@pytest.mark.parametrize("changed_field", ["judge_model", "judge_num_predict"])
+def test_resume_rejects_changed_ollama_judge_contract(
+    changed_field: str,
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    models = {
+        "llm_fast": "qwen3:0.6b",
+        "llm_judge": "qwen3:8b",
+        "llm_quality": "qwen3:8b",
+        "vlm_observer": "qwen2.5vl:3b",
+        "embed": "nomic-embed-text",
+    }
+    settings = {
+        "temperature": 0,
+        "ollama_runtime": {"llm_judge_num_predict": "512"},
+    }
+    run_dir, manifest = _create_run(
+        tmp_path,
+        provenance,
+        models=models,
+        settings=settings,
+    )
+    start_condition(run_dir, manifest, condition="B0")
+    record_condition_progress(
+        run_dir,
+        condition="B0",
+        processed_samples=1,
+        estimated_spend_usd=0.0,
+    )
+    result_path, summary_path = _write_condition_outputs(
+        run_dir,
+        manifest,
+        "B0",
+        complete_capture=False,
+    )
+    summary_path.unlink()
+    pause_condition(
+        run_dir,
+        condition="B0",
+        result_path=result_path,
+        observed_model_ids=["openai:response-model-1"],
+    )
+    changed_models = dict(models)
+    changed_settings = json.loads(json.dumps(settings))
+    if changed_field == "judge_model":
+        changed_models["llm_judge"] = "qwen3:14b"
+    else:
+        changed_settings["ollama_runtime"]["llm_judge_num_predict"] = "1024"
+    changed = _manifest(
+        provenance,
+        models=changed_models,
+        settings=changed_settings,
+    )
+
+    with pytest.raises(ProvenanceError, match="불변 설정"):
+        resume_condition(run_dir, changed, condition="B0")
+
+
 def test_suite_conditions_must_start_in_preregistered_order(
     tmp_path: Path,
     synthetic_repository: tuple[Path, dict],
@@ -522,6 +786,240 @@ def test_result_manifest_and_unregistered_file_tampering_are_rejected(
     tampered["suite_estimated_spend_usd"] = 9.0
     manifest_path.write_text(json.dumps(tampered), encoding="utf-8")
     with pytest.raises(ProvenanceError, match="변조"):
+        verify_run_manifest(run_dir)
+
+
+def test_legacy_v2_rows_remain_verifiable_but_reject_v3_fields(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    """v2는 기존 42개 필드만 엄격히 허용하고 v3와 혼용하지 않는다."""
+    _, provenance = synthetic_repository
+    manifest = _legacy_v2_manifest(_manifest(provenance))
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+    run_dir = results_dir / manifest["run_id"]
+    create_run_manifest(run_dir, manifest)
+    start_condition(run_dir, manifest, condition="B0")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "B0")
+
+    # 실제 초기 v2 manifest에는 배치 checkpoint 필드가 없었다.
+    completed = load_run_manifest(run_dir)
+    completed["conditions"]["B0"].pop("checkpoint_count")
+    _write_resigned_manifest(run_dir, completed)
+
+    verified = verify_run_manifest(run_dir)
+    assert verified["schema_version"] == 2
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    assert tuple(rows[0]) == LEGACY_RESULT_ROW_KEYS_V2
+
+    rows[0]["observer_status"] = "O-"
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="B0",
+        key="result",
+        path=result_path,
+    )
+
+    with pytest.raises(ProvenanceError, match="행 스키마"):
+        verify_run_manifest(run_dir)
+
+
+def test_v3_manifest_rejects_legacy_v2_row_schema(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(tmp_path, provenance)
+    assert manifest["schema_version"] == 3
+    start_condition(run_dir, manifest, condition="B0")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "B0")
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    legacy_rows = [
+        {key: row[key] for key in LEGACY_RESULT_ROW_KEYS_V2}
+        for row in rows
+    ]
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in legacy_rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="B0",
+        key="result",
+        path=result_path,
+    )
+
+    with pytest.raises(ProvenanceError, match="행 스키마"):
+        verify_run_manifest(run_dir)
+
+
+def test_rebound_result_rejects_invalid_diagnostic_fields(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(tmp_path, provenance)
+    start_condition(run_dir, manifest, condition="B0")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "B0")
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    rows[0]["judgement_corrected"] = "false"
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="B0",
+        key="result",
+        path=result_path,
+    )
+
+    with pytest.raises(ProvenanceError, match="judgement_corrected"):
+        verify_run_manifest(run_dir)
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "observations_text_type",
+        "observation_missing_field",
+        "cross_missing_field",
+        "cross_checks_conflict",
+        "cross_unknown_with_valid_checks",
+        "judgement_status",
+        "missing_after_status",
+    ],
+)
+def test_successful_after_row_requires_replayable_diagnostics(
+    case: str,
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(
+        tmp_path,
+        provenance,
+        planned_conditions=("A",),
+    )
+    start_condition(run_dir, manifest, condition="A")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "A")
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    if case == "observations_text_type":
+        rows[0]["observations_text"] = []
+    elif case == "observation_missing_field":
+        rows[0]["observations"][0].pop("features")
+    elif case == "cross_missing_field":
+        rows[0]["cross_check"].pop("summary")
+    elif case == "cross_checks_conflict":
+        rows[0]["cross_check"]["checks"]["scratch"] = True
+    elif case == "cross_unknown_with_valid_checks":
+        rows[0]["cross_status"] = "C?"
+    elif case == "judgement_status":
+        rows[0]["judgement"]["status"] = "unknown"
+    else:
+        rows[0]["observer_status"] = None
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="A",
+        key="result",
+        path=result_path,
+    )
+
+    with pytest.raises(ProvenanceError):
+        verify_run_manifest(run_dir)
+
+
+def test_synthesized_cross_summary_keeps_checks_but_remains_unknown(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(
+        tmp_path,
+        provenance,
+        planned_conditions=("A",),
+    )
+    start_condition(run_dir, manifest, condition="A")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "A")
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    rows[0]["cross_status"] = "C?"
+    rows[0]["cross_check"]["summary_synthesized"] = True
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="A",
+        key="result",
+        path=result_path,
+    )
+
+    verified = verify_run_manifest(run_dir)
+
+    assert verified["conditions"]["A"]["status"] == "complete"
+
+
+def test_error_row_requires_safe_empty_diagnostics(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(
+        tmp_path,
+        provenance,
+        planned_conditions=("A",),
+    )
+    start_condition(run_dir, manifest, condition="A")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "A")
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    rows[0]["error"] = "RuntimeError: sample failure"
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="A",
+        key="result",
+        path=result_path,
+    )
+
+    with pytest.raises(ProvenanceError, match="오류 행"):
+        verify_run_manifest(run_dir)
+
+
+def test_rebound_result_requires_replayable_spec_hit_fields(
+    tmp_path: Path,
+    synthetic_repository: tuple[Path, dict],
+) -> None:
+    _, provenance = synthetic_repository
+    run_dir, manifest = _create_run(tmp_path, provenance)
+    start_condition(run_dir, manifest, condition="B0")
+    result_path, _, _ = _finish_condition(run_dir, manifest, "B0")
+    rows = [json.loads(line) for line in result_path.read_text().splitlines()]
+    rows[0]["spec_hits"] = [{"clause_id": "SCREW-03"}]
+    result_path.write_text(
+        "".join(json.dumps(row) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    _rebind_output_hash(
+        run_dir,
+        condition="B0",
+        key="result",
+        path=result_path,
+    )
+
+    with pytest.raises(ProvenanceError, match="spec_hits.*필수 필드"):
         verify_run_manifest(run_dir)
 
 

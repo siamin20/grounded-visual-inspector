@@ -21,12 +21,26 @@ import tempfile
 from typing import Any, Iterable, Mapping, Sequence
 import uuid
 
+from agent.vision.contracts import normalized_checklist
 
-MANIFEST_SCHEMA_VERSION = 2
+
+MANIFEST_SCHEMA_VERSION = 3
+_LEGACY_MANIFEST_SCHEMA_VERSION = 2
+_SUPPORTED_MANIFEST_SCHEMA_VERSIONS = {
+    _LEGACY_MANIFEST_SCHEMA_VERSION,
+    MANIFEST_SCHEMA_VERSION,
+}
 _RUN_ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _CONDITION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$")
-_MANIFEST_STATUSES = {"pending", "running", "incomplete", "complete", "failed"}
-_CONDITION_STATUSES = {"running", "incomplete", "complete", "failed"}
+_MANIFEST_STATUSES = {
+    "pending",
+    "running",
+    "paused",
+    "incomplete",
+    "complete",
+    "failed",
+}
+_CONDITION_STATUSES = {"running", "paused", "incomplete", "complete", "failed"}
 _TOKEN_ACCOUNTING = {
     "provider_split",
     "estimated_split",
@@ -49,6 +63,24 @@ _ROW_USAGE_STATUSES = {
     "unknown_tokens_after_success",
     "unknown_after_error",
 }
+_CONSISTENCY_SELECTION_KEYS = {
+    "path",
+    "sha256",
+    "purpose",
+    "split",
+    "condition",
+    "seed",
+    "sample_n",
+    "repeat_count",
+    "sampling",
+    "ids",
+    "ids_sha256",
+}
+_CONSISTENCY_PURPOSE = "dev_verdict_consistency"
+_CONSISTENCY_SAMPLING = "proportional_stratified_item_truth"
+_CONSISTENCY_SEED = 20261020
+_CONSISTENCY_SAMPLE_N = 20
+_CONSISTENCY_REPEAT_COUNT = 3
 DEFAULT_PACKAGE_NAMES = (
     "fastapi",
     "uvicorn",
@@ -62,7 +94,7 @@ DEFAULT_PACKAGE_NAMES = (
     "Pillow",
     "numpy",
 )
-REQUIRED_RESULT_ROW_KEYS = (
+LEGACY_RESULT_ROW_KEYS_V2 = (
     "run_id", "provenance_sha256", "dry_run", "id", "item", "label",
     "is_defect", "split", "condition", "verdict", "defect_type",
     "confidence", "abstain_reason", "approval_required",
@@ -71,6 +103,23 @@ REQUIRED_RESULT_ROW_KEYS = (
     "successful_vlm_requests", "unknown_token_usage_successes",
     "unobserved_model_successes", "observed_model_response_count",
     "validation_errors_first", "would_fail", "observations_text",
+    "rag_query_text", "pre_validation_snapshot", "report", "latency_s",
+    "tokens", "input_tokens", "output_tokens", "token_accounting",
+    "estimated_usd", "billed_usd", "compute_proxy_usd", "cost_basis",
+    "observed_model_ids", "langsmith_run_id", "usage_status", "error",
+)
+REQUIRED_RESULT_ROW_KEYS = (
+    "run_id", "provenance_sha256", "dry_run", "id", "item", "label",
+    "is_defect", "split", "condition", "verdict", "defect_type",
+    "confidence", "abstain_reason", "approval_required",
+    "validation_attempts", "validation_rejections", "retry_count",
+    "replan_rounds", "successful_provider_requests",
+    "successful_vlm_requests", "unknown_token_usage_successes",
+    "unobserved_model_successes", "observed_model_response_count",
+    "validation_errors_first", "would_fail", "observer_status",
+    "cross_status", "observations", "cross_check", "observations_text",
+    "rag_query_text", "spec_hits", "judgement", "judgement_corrected",
+    "raw_judgement",
     "pre_validation_snapshot", "report", "latency_s", "tokens",
     "input_tokens", "output_tokens", "token_accounting", "estimated_usd",
     "billed_usd", "compute_proxy_usd", "cost_basis", "observed_model_ids",
@@ -720,8 +769,83 @@ def _validate_named_file_records(
         raise ProvenanceError(f"{name} digest가 파일 목록과 다릅니다.")
 
 
+def _validate_consistency_settings(
+    manifest: Mapping[str, Any],
+    *,
+    planned_conditions: Sequence[str],
+) -> None:
+    """R6 일관성 roster와 반복 번호를 manifest에 fail-closed로 결속한다."""
+
+    settings = manifest.get("settings")
+    if not isinstance(settings, Mapping):
+        raise ProvenanceError("settings는 개체여야 합니다.")
+    has_selection = "sample_ids_file" in settings
+    has_repeat = "consistency_repeat" in settings
+    if not has_selection and not has_repeat:
+        return
+    if not has_selection or not has_repeat:
+        raise ProvenanceError(
+            "일관성 sample_ids_file과 consistency_repeat은 함께 필요합니다."
+        )
+
+    record = settings.get("sample_ids_file")
+    if not isinstance(record, Mapping) or set(record) != _CONSISTENCY_SELECTION_KEYS:
+        raise ProvenanceError("일관성 선정 파일 기록이 올바르지 않습니다.")
+    _validate_file_record(
+        {"path": record.get("path"), "sha256": record.get("sha256")},
+        name="settings.sample_ids_file",
+    )
+    expected_scalars = {
+        "purpose": _CONSISTENCY_PURPOSE,
+        "split": "dev",
+        "condition": "A",
+        "seed": _CONSISTENCY_SEED,
+        "sample_n": _CONSISTENCY_SAMPLE_N,
+        "repeat_count": _CONSISTENCY_REPEAT_COUNT,
+        "sampling": _CONSISTENCY_SAMPLING,
+    }
+    if any(record.get(key) != value for key, value in expected_scalars.items()):
+        raise ProvenanceError("일관성 선정 계약이 R6 설계와 다릅니다.")
+    ids = record.get("ids")
+    if (
+        not isinstance(ids, list)
+        or len(ids) != _CONSISTENCY_SAMPLE_N
+        or any(
+            not isinstance(sample_id, str)
+            or not sample_id.strip()
+            or sample_id != sample_id.strip()
+            for sample_id in ids
+        )
+        or len(set(ids)) != _CONSISTENCY_SAMPLE_N
+    ):
+        raise ProvenanceError("일관성 선정 ID는 중복 없는 20개 문자여야 합니다.")
+    if record.get("ids_sha256") != canonical_sha256(ids):
+        raise ProvenanceError("일관성 선정 ID digest가 목록과 다릅니다.")
+    repeat = settings.get("consistency_repeat")
+    if type(repeat) is not int or repeat not in {1, 2, 3}:
+        raise ProvenanceError("일관성 반복 번호는 1·2·3 중 하나여야 합니다.")
+    temperature = settings.get("temperature")
+    if isinstance(temperature, bool) or temperature != 0.0:
+        raise ProvenanceError("일관성 temperature는 0이어야 합니다.")
+    if (
+        manifest.get("split") != "dev"
+        or list(planned_conditions) != ["A"]
+        or manifest.get("seed") != _CONSISTENCY_SEED
+        or manifest.get("expected_n") != _CONSISTENCY_SAMPLE_N
+    ):
+        raise ProvenanceError("일관성 실행은 seed 20261020의 dev/A 20건이어야 합니다.")
+    if settings.get("items") is not None or settings.get("limit") is not None:
+        raise ProvenanceError("일관성 roster에 품목·개수 필터를 혼합할 수 없습니다.")
+    if settings.get("final_run") or settings.get("freeze_manifest") is not None:
+        raise ProvenanceError("일관성 roster는 heldout 최종 실험에 쓸 수 없습니다.")
+
+
 def _validate_manifest(manifest: Mapping[str, Any], *, run_dir: Path | None = None) -> None:
-    if manifest.get("schema_version") != MANIFEST_SCHEMA_VERSION:
+    schema_version = manifest.get("schema_version")
+    if (
+        type(schema_version) is not int
+        or schema_version not in _SUPPORTED_MANIFEST_SCHEMA_VERSIONS
+    ):
         raise ProvenanceError("지원하지 않는 manifest schema_version입니다.")
     run_id = validate_run_id(manifest.get("run_id"))
     if run_dir is not None and run_dir.name != run_id:
@@ -746,6 +870,7 @@ def _validate_manifest(manifest: Mapping[str, Any], *, run_dir: Path | None = No
     normalized = [_validate_condition(value) for value in conditions]
     if len(normalized) != len(set(normalized)):
         raise ProvenanceError("planned_conditions에 중복이 있습니다.")
+    _validate_consistency_settings(manifest, planned_conditions=normalized)
 
     immutable_hash = manifest.get("immutable_sha256")
     if not isinstance(immutable_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", immutable_hash):
@@ -796,6 +921,14 @@ def _validate_manifest(manifest: Mapping[str, Any], *, run_dir: Path | None = No
             raise ProvenanceError("실측 manifest의 평가 이미지 수가 expected_n과 다릅니다.")
         if not artifacts["reference_images"]:
             raise ProvenanceError("실측 manifest에 참조 이미지가 없습니다.")
+    settings = manifest["settings"]
+    if "sample_ids_file" in settings and artifacts["evaluation_images"]:
+        selected_ids = settings["sample_ids_file"]["ids"]
+        evaluation_ids = [record["id"] for record in artifacts["evaluation_images"]]
+        if evaluation_ids != selected_ids:
+            raise ProvenanceError(
+                "평가 이미지 순서가 일관성 선정 ID 순서와 다릅니다."
+            )
 
     condition_records = manifest.get("conditions")
     if not isinstance(condition_records, Mapping):
@@ -815,15 +948,21 @@ def _validate_manifest(manifest: Mapping[str, Any], *, run_dir: Path | None = No
         if record.get("status") not in _CONDITION_STATUSES:
             raise ProvenanceError(f"{condition} 상태가 올바르지 않습니다.")
         _nonnegative_int(record.get("processed_samples"), f"{condition}.processed_samples")
+        if schema_version == MANIFEST_SCHEMA_VERSION or "checkpoint_count" in record:
+            _nonnegative_int(
+                record.get("checkpoint_count"),
+                f"{condition}.checkpoint_count",
+            )
         _nonnegative_float(
             record.get("estimated_spend_usd"),
             f"{condition}.estimated_spend_usd",
         )
         if "setup_usage" in record:
             _normalize_setup_usage(record["setup_usage"])
-        if record.get("status") in {"complete", "incomplete"}:
+        if record.get("status") in {"complete", "incomplete", "paused"}:
             if "setup_usage" not in record:
                 raise ProvenanceError(f"{condition}.setup_usage가 누락됐습니다.")
+        if record.get("status") in {"complete", "incomplete"}:
             expected_complete = record.get("status") == "complete"
             if record.get("complete_capture") is not expected_complete:
                 raise ProvenanceError(
@@ -845,7 +984,40 @@ def _validate_manifest(manifest: Mapping[str, Any], *, run_dir: Path | None = No
                 )
             if "result" not in record or "summary" not in record:
                 raise ProvenanceError(f"{condition} 종료 산출물이 누락됐습니다.")
-        for key in ("result", "summary"):
+        if record.get("status") == "paused":
+            processed = _nonnegative_int(
+                record.get("processed_samples"),
+                f"{condition}.processed_samples",
+            )
+            if processed <= 0 or processed >= manifest["expected_n"]:
+                raise ProvenanceError(
+                    f"{condition} paused prefix 처리 건수가 올바르지 않습니다."
+                )
+            observed = record.get("observed_model_ids")
+            if not isinstance(observed, list) or not observed or any(
+                not isinstance(value, str)
+                or not value.strip()
+                or value != value.strip()
+                for value in observed
+            ):
+                raise ProvenanceError(
+                    f"{condition}.observed_model_ids가 올바르지 않습니다."
+                )
+            if "checkpoint_result" not in record:
+                raise ProvenanceError(f"{condition} checkpoint 결과가 누락됐습니다.")
+            if record.get("pause_reason") != "batch_limit":
+                raise ProvenanceError(
+                    f"{condition}.pause_reason은 batch_limit이어야 합니다."
+                )
+            if "result" in record or "summary" in record:
+                raise ProvenanceError(
+                    f"{condition} paused 조건은 정식 result·summary를 등록할 수 없습니다."
+                )
+        elif "pause_reason" in record:
+            raise ProvenanceError(
+                f"{condition} paused 상태가 아니면 pause_reason을 남길 수 없습니다."
+            )
+        for key in ("result", "summary", "checkpoint_result"):
             if key in record:
                 _validate_file_record(record[key], name=f"{condition}.{key}")
     condition_spend = math.fsum(
@@ -860,6 +1032,19 @@ def _validate_manifest(manifest: Mapping[str, Any], *, run_dir: Path | None = No
             for record in condition_records.values()
         ):
             raise ProvenanceError("완료된 suite만 complete로 표시할 수 있습니다.")
+    paused_conditions = [
+        name
+        for name, record in condition_records.items()
+        if record.get("status") == "paused"
+    ]
+    if manifest.get("status") == "paused":
+        expected_paused = (
+            [normalized[len(condition_records) - 1]] if condition_records else []
+        )
+        if paused_conditions != expected_paused:
+            raise ProvenanceError("paused suite의 마지막 조건 상태가 다릅니다.")
+    elif paused_conditions:
+        raise ProvenanceError("paused 조건이 있는 suite는 paused 상태여야 합니다.")
     if manifest.get("status") == "pending" and condition_records:
         raise ProvenanceError("pending suite에는 조건 기록이 있을 수 없습니다.")
 
@@ -953,6 +1138,7 @@ def start_condition(
         "started_at": timestamp,
         "ended_at": None,
         "processed_samples": 0,
+        "checkpoint_count": 0,
         "estimated_spend_usd": 0.0,
     }
     current["status"] = "running"
@@ -997,6 +1183,125 @@ def record_condition_setup_usage(
         for value in current["conditions"].values()
     )
     current["updated_at"] = timestamp
+    _write_manifest(directory / "manifest.json", current)
+    return current
+
+
+def _merge_setup_usage(
+    previous: Mapping[str, Any],
+    additional: Mapping[str, Any],
+) -> dict[str, Any]:
+    """재개로 반복된 조건 초기화 usage를 손실 없이 합친다."""
+    first = _normalize_setup_usage(previous)
+    second = _normalize_setup_usage(additional)
+    if "unknown_after_error" in {first["usage_status"], second["usage_status"]}:
+        raise ProvenanceError(
+            "응답 여부를 확정할 수 없는 setup 실패 usage는 누적할 수 없습니다."
+        )
+
+    requests = first["successful_provider_requests"] + second[
+        "successful_provider_requests"
+    ]
+    unknown_tokens = first["unknown_token_usage_successes"] + second[
+        "unknown_token_usage_successes"
+    ]
+    unobserved_models = first["unobserved_model_successes"] + second[
+        "unobserved_model_successes"
+    ]
+    observed_count = first["observed_model_response_count"] + second[
+        "observed_model_response_count"
+    ]
+
+    effective_accounting = [
+        value["token_accounting"]
+        for value in (first, second)
+        if value["successful_provider_requests"] or value["tokens"]
+    ]
+    if not effective_accounting or "total_only" in effective_accounting:
+        accounting = "total_only"
+        input_tokens = output_tokens = None
+    else:
+        distinct = set(effective_accounting)
+        accounting = next(iter(distinct)) if len(distinct) == 1 else "mixed_split"
+        input_tokens = int(first["input_tokens"] or 0) + int(
+            second["input_tokens"] or 0
+        )
+        output_tokens = int(first["output_tokens"] or 0) + int(
+            second["output_tokens"] or 0
+        )
+
+    if unknown_tokens or unobserved_models:
+        status = "unknown_tokens_after_success"
+    elif any(
+        value["usage_status"] == "fake_estimate_no_billing"
+        for value in (first, second)
+    ):
+        status = "fake_estimate_no_billing"
+    elif not requests:
+        status = "not_applicable"
+    elif accounting == "total_only":
+        status = "known_total_only"
+    else:
+        status = "known_split"
+
+    merged = {
+        "tokens": first["tokens"] + second["tokens"],
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "token_accounting": accounting,
+        "estimated_usd": math.fsum(
+            [first["estimated_usd"], second["estimated_usd"]]
+        ),
+        "compute_proxy_usd": math.fsum(
+            [first["compute_proxy_usd"], second["compute_proxy_usd"]]
+        ),
+        "successful_provider_requests": requests,
+        "successful_vlm_requests": first["successful_vlm_requests"]
+        + second["successful_vlm_requests"],
+        "unknown_token_usage_successes": unknown_tokens,
+        "unobserved_model_successes": unobserved_models,
+        "observed_model_response_count": observed_count,
+        "observed_model_ids": list(
+            dict.fromkeys(
+                first["observed_model_ids"] + second["observed_model_ids"]
+            )
+        ),
+        "latency_s": math.fsum([first["latency_s"], second["latency_s"]]),
+        "usage_status": status,
+    }
+    return _normalize_setup_usage(merged)
+
+
+def accumulate_condition_setup_usage(
+    run_dir: str | Path,
+    *,
+    condition: str,
+    setup_usage: Mapping[str, Any],
+    updated_at: str | None = None,
+) -> dict[str, Any]:
+    """배치 재개 시 다시 소비한 조건 초기화 usage를 누적한다."""
+    directory = Path(run_dir)
+    requested = _validate_condition(condition)
+    additional = _normalize_setup_usage(setup_usage)
+    current = load_run_manifest(directory)
+    record = current["conditions"].get(requested)
+    if not isinstance(record, dict) or record.get("status") != "running":
+        raise ProvenanceError(
+            f"running 조건만 초기화 usage를 누적할 수 있습니다: {requested}"
+        )
+    previous = record.get("setup_usage")
+    if not isinstance(previous, Mapping):
+        raise ProvenanceError("재개 조건의 기존 setup_usage가 누락됐습니다.")
+    merged = _merge_setup_usage(previous, additional)
+    record["setup_usage"] = merged
+    record["estimated_spend_usd"] = math.fsum(
+        [float(record["estimated_spend_usd"]), additional["estimated_usd"]]
+    )
+    current["suite_estimated_spend_usd"] = math.fsum(
+        float(value["estimated_spend_usd"])
+        for value in current["conditions"].values()
+    )
+    current["updated_at"] = updated_at or _utc_now()
     _write_manifest(directory / "manifest.json", current)
     return current
 
@@ -1101,6 +1406,85 @@ def complete_condition(
         current["status"] = "incomplete"
         current["completed_at"] = None
     current["updated_at"] = timestamp
+    _write_manifest(directory / "manifest.json", current)
+    return current
+
+
+def pause_condition(
+    run_dir: str | Path,
+    *,
+    condition: str,
+    result_path: str | Path,
+    observed_model_ids: Sequence[str],
+    paused_at: str | None = None,
+) -> dict[str, Any]:
+    """의도적인 dev 배치 경계에서 결과 prefix를 hash로 고정한다."""
+    directory = Path(run_dir)
+    requested = _validate_condition(condition)
+    current = load_run_manifest(directory)
+    record = current["conditions"].get(requested)
+    if not isinstance(record, dict) or record.get("status") != "running":
+        raise ProvenanceError(f"running 조건만 일시정지할 수 있습니다: {requested}")
+    processed = _nonnegative_int(record.get("processed_samples"), "processed_samples")
+    if processed <= 0 or processed >= current["expected_n"]:
+        raise ProvenanceError("일시정지는 1건 이상이며 전체보다 작은 prefix에서만 가능합니다.")
+    if "setup_usage" not in record:
+        raise ProvenanceError("일시정지 조건의 setup_usage가 누락됐습니다.")
+    if not observed_model_ids or any(
+        not isinstance(value, str) or not value.strip()
+        for value in observed_model_ids
+    ):
+        raise ProvenanceError("observed_model_ids는 빈 문자열이 없는 목록이어야 합니다.")
+    result, result_relative = _safe_run_file(directory, result_path)
+    timestamp = paused_at or _utc_now()
+    record.update({
+        "status": "paused",
+        "paused_at": timestamp,
+        "pause_reason": "batch_limit",
+        "checkpoint_count": record["checkpoint_count"] + 1,
+        "observed_model_ids": list(dict.fromkeys(observed_model_ids)),
+        "checkpoint_result": {
+            "path": result_relative,
+            "sha256": sha256_file(result),
+        },
+    })
+    current["status"] = "paused"
+    current["completed_at"] = None
+    current["updated_at"] = timestamp
+    _write_manifest(directory / "manifest.json", current)
+    return current
+
+
+def resume_condition(
+    run_dir: str | Path,
+    expected_manifest: Mapping[str, Any],
+    *,
+    condition: str,
+    resumed_at: str | None = None,
+) -> dict[str, Any]:
+    """hash로 검증된 paused 조건만 다시 running으로 바꾼다."""
+    directory = Path(run_dir)
+    requested = _validate_condition(condition)
+    current = load_run_manifest(directory)
+    _validate_manifest(expected_manifest, run_dir=directory)
+    if current["immutable_sha256"] != expected_manifest["immutable_sha256"]:
+        raise ProvenanceError("기존 suite의 불변 설정과 재개 설정이 다릅니다.")
+    record = current["conditions"].get(requested)
+    if current.get("status") != "paused" or not isinstance(record, dict):
+        raise ProvenanceError("paused suite만 재개할 수 있습니다.")
+    if record.get("status") != "paused":
+        raise ProvenanceError(f"paused 조건만 재개할 수 있습니다: {requested}")
+    checkpoint = record.get("checkpoint_result")
+    _validate_file_record(checkpoint, name=f"{requested}.checkpoint_result")
+    result, _ = _safe_run_file(directory, checkpoint["path"])
+    if sha256_file(result) != checkpoint["sha256"]:
+        raise ProvenanceError("재개할 checkpoint 결과가 변조됐습니다.")
+    record["status"] = "running"
+    record.pop("paused_at", None)
+    record.pop("pause_reason", None)
+    record.pop("checkpoint_result", None)
+    current["status"] = "running"
+    current["updated_at"] = resumed_at or _utc_now()
     _write_manifest(directory / "manifest.json", current)
     return current
 
@@ -1221,6 +1605,228 @@ def _verify_row_usage(
     return status in {"unknown_after_error", "unknown_tokens_after_success"}
 
 
+def _verify_row_diagnostics(row: Mapping[str, Any], *, location: str) -> None:
+    """Spec-Judge 실패 원인을 재현할 수 있는 구조화 필드 형식을 검증한다."""
+    if row.get("observer_status") not in {None, "O+", "O-", "O?"}:
+        raise ProvenanceError(f"{location}.observer_status가 올바르지 않습니다.")
+    if row.get("cross_status") not in {
+        None, "C+", "C-", "C?", "C-skip"
+    }:
+        raise ProvenanceError(f"{location}.cross_status가 올바르지 않습니다.")
+    for field in ("observations_text", "rag_query_text"):
+        if not isinstance(row.get(field), str):
+            raise ProvenanceError(f"{location}.{field}가 문자열이 아닙니다.")
+
+    def string_list(value: Any, *, name: str,
+                    allowed: set[str] | None = None) -> None:
+        if not isinstance(value, list) or any(
+            not isinstance(entry, str)
+            or not entry.strip()
+            or entry != entry.strip()
+            or (allowed is not None and entry not in allowed)
+            for entry in value
+        ):
+            raise ProvenanceError(f"{location}.{name}가 올바른 문자열 목록이 아닙니다.")
+
+    regions = {"tl", "tr", "bl", "br", "center"}
+    observations = row.get("observations")
+    if not isinstance(observations, list) or any(
+        not isinstance(value, dict) for value in observations
+    ):
+        raise ProvenanceError(f"{location}.observations가 개체 배열이 아닙니다.")
+    required_observation = {
+        "call_id", "region", "text", "anomaly_seen", "regions", "features", "model"
+    }
+    for index, observation in enumerate(observations):
+        name = f"observations[{index}]"
+        if not required_observation <= set(observation):
+            raise ProvenanceError(f"{location}.{name} 필수 필드가 누락됐습니다.")
+        if (
+            not isinstance(observation.get("call_id"), str)
+            or not observation["call_id"].strip()
+            or observation.get("region") not in {"full", *regions}
+            or not isinstance(observation.get("text"), str)
+            or (
+                observation.get("anomaly_seen") is not None
+                and type(observation.get("anomaly_seen")) is not bool
+            )
+            or (
+                observation.get("model") is not None
+                and (
+                    not isinstance(observation.get("model"), str)
+                    or not observation["model"].strip()
+                )
+            )
+        ):
+            raise ProvenanceError(f"{location}.{name} 구조가 올바르지 않습니다.")
+        string_list(observation.get("regions"), name=f"{name}.regions", allowed=regions)
+        string_list(observation.get("features"), name=f"{name}.features")
+
+    cross_check = row.get("cross_check")
+    if not isinstance(cross_check, dict):
+        raise ProvenanceError(f"{location}.cross_check가 개체가 아닙니다.")
+    if cross_check:
+        required_cross = {
+            "call_id", "summary", "anomaly_seen", "regions", "features", "model"
+        }
+        if not required_cross <= set(cross_check):
+            raise ProvenanceError(f"{location}.cross_check 필수 필드가 누락됐습니다.")
+        if (
+            not isinstance(cross_check.get("call_id"), str)
+            or not cross_check["call_id"].strip()
+            or not isinstance(cross_check.get("summary"), str)
+            or (
+                cross_check.get("anomaly_seen") is not None
+                and type(cross_check.get("anomaly_seen")) is not bool
+            )
+            or (
+                cross_check.get("model") is not None
+                and (
+                    not isinstance(cross_check.get("model"), str)
+                    or not cross_check["model"].strip()
+                )
+            )
+        ):
+            raise ProvenanceError(f"{location}.cross_check 구조가 올바르지 않습니다.")
+        string_list(cross_check.get("regions"), name="cross_check.regions", allowed=regions)
+        string_list(cross_check.get("features"), name="cross_check.features")
+        summary_synthesized = cross_check.get("summary_synthesized", False)
+        if type(summary_synthesized) is not bool:
+            raise ProvenanceError(
+                f"{location}.cross_check.summary_synthesized가 boolean이 아닙니다."
+            )
+        if summary_synthesized and row.get("cross_status") != "C?":
+            raise ProvenanceError(
+                f"{location} 합성 Cross 요약은 C?로만 기록해야 합니다."
+            )
+        if "checks" in cross_check:
+            checks = normalized_checklist(cross_check.get("checks"))
+            if row.get("cross_status") in {"C+", "C-"}:
+                if checks is None:
+                    raise ProvenanceError(
+                        f"{location}.cross_check.checks 계약이 올바르지 않습니다."
+                    )
+                expected = "C+" if any(checks.values()) else "C-"
+                if row.get("cross_status") != expected:
+                    raise ProvenanceError(
+                        f"{location}.cross_status와 checks가 모순됩니다."
+                    )
+            elif summary_synthesized:
+                expected_anomaly = any(checks.values()) if checks is not None else None
+                if (
+                    checks is None
+                    or type(cross_check.get("anomaly_seen")) is not bool
+                    or cross_check.get("anomaly_seen") is not expected_anomaly
+                    or (
+                        expected_anomaly
+                        and (
+                            not cross_check.get("regions")
+                            or not cross_check.get("features")
+                        )
+                    )
+                    or (
+                        expected_anomaly is False
+                        and (
+                            cross_check.get("regions")
+                            or cross_check.get("features")
+                        )
+                    )
+                ):
+                    raise ProvenanceError(
+                        f"{location} 합성 Cross 요약의 구조 계약이 올바르지 않습니다."
+                    )
+            elif checks is not None:
+                raise ProvenanceError(
+                    f"{location}.cross_status가 C?인데 유효한 checks가 존재합니다."
+                )
+        elif summary_synthesized:
+            raise ProvenanceError(
+                f"{location} 합성 Cross 요약의 checks가 누락됐습니다."
+            )
+    hits = row.get("spec_hits")
+    if not isinstance(hits, list) or any(not isinstance(hit, dict) for hit in hits):
+        raise ProvenanceError(f"{location}.spec_hits가 개체 배열이 아닙니다.")
+    required_hit_keys = {"clause_id", "item", "defect_type", "text", "score"}
+    for index, hit in enumerate(hits):
+        missing = required_hit_keys - set(hit)
+        if missing:
+            raise ProvenanceError(
+                f"{location}.spec_hits[{index}] 필수 필드가 누락됐습니다."
+            )
+        for key in ("clause_id", "item", "defect_type", "text"):
+            value = hit.get(key)
+            if not isinstance(value, str):
+                raise ProvenanceError(
+                    f"{location}.spec_hits[{index}].{key}가 문자열이 아닙니다."
+                )
+        score = hit.get("score")
+        if (
+            isinstance(score, bool)
+            or not isinstance(score, (int, float))
+            or not math.isfinite(float(score))
+        ):
+            raise ProvenanceError(
+                f"{location}.spec_hits[{index}].score가 유한한 수치가 아닙니다."
+            )
+    judgement = row.get("judgement")
+    if not isinstance(judgement, dict):
+        raise ProvenanceError(f"{location}.judgement가 개체가 아닙니다.")
+    if judgement:
+        if not {"violations", "defect_type", "rationale", "status"} <= set(judgement):
+            raise ProvenanceError(f"{location}.judgement 필수 필드가 누락됐습니다.")
+        string_list(judgement.get("violations"), name="judgement.violations")
+        defect_type = judgement.get("defect_type")
+        if defect_type is not None and (
+            not isinstance(defect_type, str) or not defect_type.strip()
+        ):
+            raise ProvenanceError(f"{location}.judgement.defect_type이 올바르지 않습니다.")
+        if (
+            not isinstance(judgement.get("rationale"), str)
+            or not judgement["rationale"].strip()
+            or judgement.get("status") not in {"grounded", "none", "invalid"}
+        ):
+            raise ProvenanceError(f"{location}.judgement 구조가 올바르지 않습니다.")
+    if type(row.get("judgement_corrected")) is not bool:
+        raise ProvenanceError(
+            f"{location}.judgement_corrected가 boolean이 아닙니다."
+        )
+    if not isinstance(row.get("raw_judgement"), dict):
+        raise ProvenanceError(f"{location}.raw_judgement가 개체가 아닙니다.")
+
+    is_after = row.get("condition") not in {"B0", "B1"}
+    successful = row.get("error") is None
+    if not successful:
+        error_defaults = {
+            "observer_status": None,
+            "cross_status": None,
+            "observations": [],
+            "cross_check": {},
+            "observations_text": "",
+            "rag_query_text": "",
+            "spec_hits": [],
+            "judgement": {},
+            "judgement_corrected": False,
+            "raw_judgement": {},
+        }
+        for field, expected in error_defaults.items():
+            if row.get(field) != expected:
+                raise ProvenanceError(
+                    f"{location} 오류 행의 {field}는 안전한 기본값이어야 합니다."
+                )
+    if is_after and successful:
+        if row.get("observer_status") not in {"O+", "O-", "O?"}:
+            raise ProvenanceError(f"{location} 성공 A 행의 observer_status가 누락됐습니다.")
+        if row.get("cross_status") not in {"C+", "C-", "C?", "C-skip"}:
+            raise ProvenanceError(f"{location} 성공 A 행의 cross_status가 누락됐습니다.")
+        if not observations or not judgement:
+            raise ProvenanceError(f"{location} 성공 A 행의 진단 근거가 누락됐습니다.")
+        if row.get("cross_status") == "C-skip":
+            if cross_check:
+                raise ProvenanceError(f"{location} C-skip 행에 cross_check가 존재합니다.")
+        elif not cross_check:
+            raise ProvenanceError(f"{location} 성공 A 행의 cross_check가 누락됐습니다.")
+
+
 def _verify_jsonl_rows(
     path: Path,
     *,
@@ -1241,6 +1847,13 @@ def _verify_jsonl_rows(
         record["id"] for record in manifest["artifacts"]["evaluation_images"]
     }
     seen_ids: set[str] = set()
+    row_ids: list[str] = []
+    schema_version = manifest["schema_version"]
+    expected_row_keys = (
+        LEGACY_RESULT_ROW_KEYS_V2
+        if schema_version == _LEGACY_MANIFEST_SCHEMA_VERSION
+        else REQUIRED_RESULT_ROW_KEYS
+    )
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
@@ -1250,7 +1863,7 @@ def _verify_jsonl_rows(
             raise ProvenanceError(f"결과 JSONL이 손상되었습니다: {path.name}:{line_number}") from exc
         if not isinstance(row, dict):
             raise ProvenanceError(f"결과 JSONL 행이 개체가 아닙니다: {path.name}:{line_number}")
-        if tuple(row) != REQUIRED_RESULT_ROW_KEYS:
+        if tuple(row) != expected_row_keys:
             raise ProvenanceError(
                 f"결과 JSONL 행 스키마가 올바르지 않습니다: {path.name}:{line_number}"
             )
@@ -1265,14 +1878,17 @@ def _verify_jsonl_rows(
             if row.get(key) != value:
                 raise ProvenanceError(f"결과 행의 {key}가 manifest와 다릅니다: {path.name}:{line_number}")
         location = f"{path.name}:{line_number}"
+        if schema_version == MANIFEST_SCHEMA_VERSION:
+            _verify_row_diagnostics(row, location=location)
         row_id = row.get("id")
         if not isinstance(row_id, str) or not row_id.strip() or row_id != row_id.strip():
             raise ProvenanceError(f"{location}.id가 올바르지 않습니다.")
         if row_id in seen_ids:
             raise ProvenanceError(f"결과 JSONL에 중복 id가 있습니다: {row_id}")
-        if row_id not in expected_ids:
+        if expected_ids and row_id not in expected_ids:
             raise ProvenanceError(f"결과 id가 manifest 평가 roster에 없습니다: {row_id}")
         seen_ids.add(row_id)
+        row_ids.append(row_id)
         if expected_truth is not None:
             truth = expected_truth.get(row_id)
             if truth is None:
@@ -1312,6 +1928,7 @@ def _verify_jsonl_rows(
         )
     return {
         "processed_samples": row_count,
+        "row_ids": row_ids,
         "condition_estimated_usd": math.fsum(estimated_spend),
         "observed_model_ids": observed_model_ids,
         "usage_unknown_count": usage_unknown_count,
@@ -1492,6 +2109,14 @@ def _verify_repository_artifacts(
     records.extend(artifacts["source"])
     records.extend(artifacts["evaluation_images"])
     records.extend(artifacts["reference_images"])
+    selection_record = manifest["settings"].get("sample_ids_file")
+    if isinstance(selection_record, Mapping):
+        records.append(
+            {
+                "path": selection_record["path"],
+                "sha256": selection_record["sha256"],
+            }
+        )
     for record in records:
         relative = record["path"]
         try:
@@ -1544,6 +2169,24 @@ def _verify_repository_artifacts(
         if sample_id in samples_by_id:
             raise ProvenanceError(f"평가 dataset에 중복 id가 있습니다: {sample_id}")
         samples_by_id[sample_id] = sample
+
+    if isinstance(selection_record, Mapping):
+        selection = read_json_object(root / selection_record["path"])
+        if selection.get("ids") != selection_record["ids"]:
+            raise ProvenanceError("일관성 선정 파일 ID가 manifest와 다릅니다.")
+        for key in (
+            "purpose",
+            "split",
+            "condition",
+            "seed",
+            "sample_n",
+            "repeat_count",
+            "sampling",
+        ):
+            if selection.get(key) != selection_record[key]:
+                raise ProvenanceError(
+                    f"일관성 선정 파일의 {key}가 manifest와 다릅니다."
+                )
 
     selected_items: set[str] = set()
     selected_truth: dict[str, dict[str, Any]] = {}
@@ -1636,6 +2279,60 @@ def verify_run_manifest(
 
     registered_jsonl: set[str] = set()
     for condition, record in manifest["conditions"].items():
+        if record["status"] == "paused":
+            checkpoint = record.get("checkpoint_result")
+            _validate_file_record(
+                checkpoint,
+                name=f"{condition}.checkpoint_result",
+            )
+            target, relative = _safe_run_file(directory, checkpoint["path"])
+            if sha256_file(target) != checkpoint["sha256"]:
+                raise ProvenanceError(f"{condition} checkpoint 결과가 변조됐습니다.")
+            registered_jsonl.add(relative)
+            if validate_rows:
+                facts = _verify_jsonl_rows(
+                    target,
+                    manifest=manifest,
+                    condition=condition,
+                    require_exact_roster=False,
+                    expected_truth=expected_truth,
+                )
+                expected_ids = [
+                    value["id"]
+                    for value in manifest["artifacts"]["evaluation_images"]
+                ]
+                if expected_ids and facts["row_ids"] != expected_ids[: len(facts["row_ids"])]:
+                    raise ProvenanceError(
+                        f"{condition} checkpoint ID가 고정 roster의 prefix가 아닙니다."
+                    )
+                if facts["processed_samples"] != record["processed_samples"]:
+                    raise ProvenanceError(
+                        f"{condition} checkpoint와 manifest 처리 건수가 다릅니다."
+                    )
+                setup = _normalize_setup_usage(record["setup_usage"])
+                expected_spend = math.fsum(
+                    [setup["estimated_usd"], facts["condition_estimated_usd"]]
+                )
+                if not math.isclose(
+                    expected_spend,
+                    float(record["estimated_spend_usd"]),
+                    rel_tol=0.0,
+                    abs_tol=1e-9,
+                ):
+                    raise ProvenanceError(
+                        f"{condition} checkpoint usage 누계가 manifest와 다릅니다."
+                    )
+                if facts["usage_unknown_count"]:
+                    raise ProvenanceError(
+                        f"{condition} usage가 미지인 checkpoint는 재개할 수 없습니다."
+                    )
+                observed = set(facts["observed_model_ids"])
+                observed.update(setup["observed_model_ids"])
+                if observed != set(record["observed_model_ids"]):
+                    raise ProvenanceError(
+                        f"{condition} checkpoint 관측 모델과 manifest가 다릅니다."
+                    )
+            continue
         if record["status"] not in {"complete", "incomplete"}:
             if require_complete:
                 raise ProvenanceError(f"완료되지 않은 조건 상태입니다: {condition}")
@@ -1686,9 +2383,11 @@ def verify_run_manifest(
 
 __all__ = [
     "DEFAULT_PACKAGE_NAMES",
+    "LEGACY_RESULT_ROW_KEYS_V2",
     "MANIFEST_SCHEMA_VERSION",
     "ProvenanceError",
     "REQUIRED_RESULT_ROW_KEYS",
+    "accumulate_condition_setup_usage",
     "atomic_write_json",
     "build_run_manifest",
     "canonical_sha256",
@@ -1699,10 +2398,12 @@ __all__ = [
     "join_run_manifest",
     "load_run_manifest",
     "new_run_id",
+    "pause_condition",
     "read_git_state",
     "read_json_object",
     "record_condition_progress",
     "record_condition_setup_usage",
+    "resume_condition",
     "sha256_file",
     "sha256_tree",
     "start_condition",

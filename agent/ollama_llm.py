@@ -1,17 +1,21 @@
 """LLM_BACKEND=ollama — 로컬 Ollama 실모델 백엔드 (fake_llm과 동일 인터페이스).
 
-Wave 10a 구도를 실물로: fast(기본 qwen3:0.6b)는 분류·계획·단순 대화, quality(기본
-qwen3:8b)는 최종 답변 작성 전담. Ollama의 구조화 출력(format=<JSON Schema>)과
+Wave 10a 구도를 실물로: fast(기본 qwen3:0.6b)는 분류·계획·단순 대화,
+judge(기본 qwen3:8b)는 기준서 조항 판정, quality(기본 qwen3:8b)는 최종 답변
+작성 전담. Ollama의 구조화 출력(format=<JSON Schema>)과
 temperature=0으로 변동을 줄이지만 실모델이므로 결정론은 아니다 — 그래서 gate(W6)·
 replan(W7)·validator(W8)가 연출이 아니라 실제 방어선으로 동작한다.
-fc
+
 가상 단가 × 실측 토큰 수(prompt_eval_count+eval_count)는
 ``compute_proxy_usd``로 기록한다. 로컬 추론은 API 과금이 없으므로
 ``estimated_usd``는 0으로 분리한다. ``usd``는 기존 호환용 프록시 값이다.
 
 사전 조건: `ollama serve` 실행 중 + `ollama pull qwen3:0.6b qwen3:8b`.
 """
+import asyncio
 import json
+import math
+import os
 import re
 from pathlib import Path
 
@@ -19,6 +23,34 @@ import httpx
 from langsmith import traceable
 
 OLLAMA_URL = "http://127.0.0.1:11434/api/chat"
+DEFAULT_OLLAMA_FAST_NUM_PREDICT = 512
+DEFAULT_OLLAMA_JUDGE_NUM_PREDICT = 512
+DEFAULT_OLLAMA_QUALITY_NUM_PREDICT = 2048
+DEFAULT_OLLAMA_LLM_WALL_TIMEOUT_S = 300.0
+
+
+def _positive_int_env(name: str, default: int) -> int:
+    """생성 상한용 정수 환경변수를 fail-closed로 읽는다."""
+    raw = os.environ.get(name, str(default))
+    try:
+        value = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{name}는 1 이상 정수여야 합니다.") from exc
+    if value < 1:
+        raise ValueError(f"{name}는 1 이상 정수여야 합니다.")
+    return value
+
+
+def _positive_float_env(name: str, default: float) -> float:
+    """유한한 양수 환경변수를 fail-closed로 읽는다."""
+    raw = os.environ.get(name, str(default))
+    try:
+        value = float(raw)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError(f"{name}는 유한한 0 초 초과 수치여야 합니다.") from exc
+    if not math.isfinite(value) or value <= 0:
+        raise ValueError(f"{name}는 유한한 0 초 초과 수치여야 합니다.")
+    return value
 
 
 def _usage_count(data: dict, key: str) -> int | None:
@@ -116,11 +148,17 @@ INSPECTION_PLAN_SCHEMA = {
 JUDGE_SCHEMA = {
     "type": "object",
     "properties": {
-        "violations": {"type": "array", "items": {"type": "string"}},
+        "violations": {
+            "type": "array",
+            "items": {"type": "string"},
+            "maxItems": 3,
+            "uniqueItems": True,
+        },
         "defect_type": {"type": ["string", "null"]},
-        "rationale": {"type": "string"},
+        "rationale": {"type": "string", "minLength": 1, "maxLength": 240},
     },
     "required": ["violations", "defect_type", "rationale"],
+    "additionalProperties": False,
 }
 
 REPORT_SCHEMA = {
@@ -201,10 +239,27 @@ def _normalize_judgement(raw: object, clauses: list[dict]) -> dict:
 
 
 class OllamaLLM:
+    num_predict_env = "OLLAMA_LLM_NUM_PREDICT"
+    default_num_predict = 1024
+
     def __init__(self, model: str, usd_per_1k_tokens: float):
         self.name = f"ollama:{model}"
         self.model = model
         self.usd_per_1k = usd_per_1k_tokens
+        self.num_predict = _positive_int_env(
+            self.num_predict_env, self.default_num_predict
+        )
+        self.wall_timeout_s = _positive_float_env(
+            "OLLAMA_LLM_WALL_TIMEOUT_S", DEFAULT_OLLAMA_LLM_WALL_TIMEOUT_S
+        )
+
+    @staticmethod
+    def _reject_truncated_response(data: dict) -> None:
+        """완료가 확인되지 않거나 상한에 닿은 부분 응답을 거부한다."""
+        if data.get("done") is not True:
+            raise RuntimeError("Ollama LLM 응답에 완료 기록이 없습니다.")
+        if data.get("done_reason") == "length":
+            raise RuntimeError("Ollama LLM 응답이 출력 토큰 상한에서 잘렸습니다.")
 
     def _usage(self, data: dict) -> dict:
         """실제 응답이 제공한 토큰과 모델 ID만 기록한다."""
@@ -242,15 +297,43 @@ class OllamaLLM:
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "stream": False,
-            "options": {"temperature": 0.0},
+            "think": False,
+            "options": {
+                "temperature": 0.0,
+                "num_predict": self.num_predict,
+            },
         }
         if schema is not None:
             payload["format"] = schema
-        resp = httpx.post(OLLAMA_URL, json=payload, timeout=300.0)
+        resp = httpx.post(
+            OLLAMA_URL, json=payload, timeout=self.wall_timeout_s
+        )
         resp.raise_for_status()
         data = resp.json()
+        self._reject_truncated_response(data)
         content = data["message"]["content"]
         return content, self._usage(data)
+
+    def _judge(self, observations_text: str, clauses: list[dict],
+               item: str) -> tuple[dict, dict]:
+        """Spec-Judge 공통 프롬프트와 출력 계약을 적용한다."""
+        system = (
+            "당신은 제품 외관 검사의 Spec-Judge다. 관찰문에 보이는 사실만을 "
+            "기준서 조항과 비교하라. 위반으로 판정한 조항 ID는 제공된 ID만 "
+            "쓰고, defect_type=good인 합격 조항은 violations에 넣지 마라. "
+            "위반이 없으면 violations=[]·defect_type=null로 응답하라. "
+            "rationale은 160자 이내의 한 문장으로만 쓰고 JSON 객체만 응답하라."
+        )
+        user = (
+            f"## 품목\n{item}\n\n## 관찰\n{observations_text}\n\n## 기준서 조항\n"
+            + json.dumps(clauses, ensure_ascii=False)
+        )
+        content, usage = self._chat(system, user, schema=JUDGE_SCHEMA)
+        try:
+            raw = json.loads(content)
+        except (json.JSONDecodeError, TypeError):
+            raw = {}
+        return _normalize_judgement(raw, clauses), usage
 
     async def _chat_stream(self, system: str, user: str, on_token=None,
                            schema: dict | None = None) -> tuple[str, dict]:
@@ -263,7 +346,11 @@ class OllamaLLM:
             "messages": [{"role": "system", "content": system},
                          {"role": "user", "content": user}],
             "stream": True,
-            "options": {"temperature": 0.0},
+            "think": False,
+            "options": {
+                "temperature": 0.0,
+                "num_predict": self.num_predict,
+            },
         }
         if schema is not None:
             payload["format"] = schema
@@ -284,40 +371,68 @@ class OllamaLLM:
             "observed_model_response_count": 0,
             "unobserved_model_successes": 0,
         }
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            async with client.stream("POST", OLLAMA_URL, json=payload) as resp:
-                resp.raise_for_status()
-                usage["successful_provider_requests"] = 1
-                usage["unknown_token_usage_successes"] = 1
-                usage["unobserved_model_successes"] = 1
-                async for line in resp.aiter_lines():
-                    if not line:
-                        continue
-                    data = json.loads(line)
-                    observed_model = data.get("model")
-                    if isinstance(observed_model, str) and observed_model.strip():
-                        usage["observed_model"] = f"ollama:{observed_model.strip()}"
-                        usage["observed_model_response_count"] = 1
-                        usage["unobserved_model_successes"] = 0
-                    piece = data.get("message", {}).get("content", "")
-                    if piece:
-                        chunks.append(piece)
-                        if on_token is not None:
-                            on_token(piece)
-                    if data.get("done"):
-                        final_usage = self._usage(data)
-                        if final_usage["observed_model"] is None:
-                            final_usage["observed_model"] = usage["observed_model"]
-                            if usage["observed_model"] is not None:
-                                final_usage["observed_model_response_count"] = 1
-                                final_usage["unobserved_model_successes"] = 0
-                        usage = final_usage
+        done_seen = False
+        try:
+            async with asyncio.timeout(self.wall_timeout_s):
+                async with httpx.AsyncClient(timeout=self.wall_timeout_s) as client:
+                    async with client.stream(
+                        "POST", OLLAMA_URL, json=payload
+                    ) as resp:
+                        resp.raise_for_status()
+                        usage["successful_provider_requests"] = 1
+                        usage["unknown_token_usage_successes"] = 1
+                        usage["unobserved_model_successes"] = 1
+                        async for line in resp.aiter_lines():
+                            if not line:
+                                continue
+                            data = json.loads(line)
+                            observed_model = data.get("model")
+                            if (
+                                isinstance(observed_model, str)
+                                and observed_model.strip()
+                            ):
+                                usage["observed_model"] = (
+                                    f"ollama:{observed_model.strip()}"
+                                )
+                                usage["observed_model_response_count"] = 1
+                                usage["unobserved_model_successes"] = 0
+                            piece = data.get("message", {}).get("content", "")
+                            if piece:
+                                chunks.append(piece)
+                                if on_token is not None:
+                                    on_token(piece)
+                            if data.get("done"):
+                                self._reject_truncated_response(data)
+                                done_seen = True
+                                final_usage = self._usage(data)
+                                if final_usage["observed_model"] is None:
+                                    final_usage["observed_model"] = usage[
+                                        "observed_model"
+                                    ]
+                                    if usage["observed_model"] is not None:
+                                        final_usage[
+                                            "observed_model_response_count"
+                                        ] = 1
+                                        final_usage[
+                                            "unobserved_model_successes"
+                                        ] = 0
+                                usage = final_usage
+        except TimeoutError as exc:
+            raise RuntimeError(
+                "Ollama LLM 스트림이 "
+                f"{self.wall_timeout_s:g}초 전체 제한을 넘겼습니다."
+            ) from exc
+        if not done_seen:
+            raise RuntimeError("Ollama LLM 스트림이 완료 기록 없이 종료됐습니다.")
         usage["prompt"] = f"[SYSTEM]\n{system}\n\n[USER]\n{user}"
         return "".join(chunks), usage
 
 
 class OllamaFastLLM(OllamaLLM):
     """분류·계획·단순 대화 전담 (저사양 소형 모델)."""
+
+    num_predict_env = "OLLAMA_FAST_NUM_PREDICT"
+    default_num_predict = DEFAULT_OLLAMA_FAST_NUM_PREDICT
 
     @traceable(run_type="llm", name="ollama_fast.route")
     def route(self, query: str) -> tuple[dict, dict]:
@@ -403,22 +518,7 @@ class OllamaFastLLM(OllamaLLM):
     @traceable(run_type="llm", name="ollama_fast.judge")
     def judge(self, observations_text: str, clauses: list[dict],
               item: str) -> tuple[dict, dict]:
-        system = (
-            "당신은 제품 외관 검사의 Spec-Judge다. 관찰문에 보이는 사실만을 "
-            "기준서 조항과 비교하라. 위반으로 판정한 조항 ID는 제공된 ID만 "
-            "쓰고, 위반이 없으면 violations=[]·defect_type=null로 응답하라. "
-            "JSON 객체만 응답하라."
-        )
-        user = (
-            f"## 품목\n{item}\n\n## 관찰\n{observations_text}\n\n## 기준서 조항\n"
-            + json.dumps(clauses, ensure_ascii=False)
-        )
-        content, usage = self._chat(system, user, schema=JUDGE_SCHEMA)
-        try:
-            raw = json.loads(content)
-        except (json.JSONDecodeError, TypeError):
-            raw = {}
-        return _normalize_judgement(raw, clauses), usage
+        return self._judge(observations_text, clauses, item)
 
     @traceable(run_type="llm", name="ollama_fast.analyze")
     def analyze(self, collected: list[dict]) -> tuple[str, dict]:
@@ -441,8 +541,27 @@ class OllamaFastLLM(OllamaLLM):
         return await self._chat_stream(system, user, on_token=on_token)
 
 
+class OllamaJudgeLLM(OllamaLLM):
+    """기준서 조항 판정 전담 모델.
+
+    짧은 구조화 출력이지만 0.6B 모델의 의미 판단 한계를 피하기 위해
+    quality와 같은 8B 기본 모델을 독립 역할로 주입한다.
+    """
+
+    num_predict_env = "OLLAMA_JUDGE_NUM_PREDICT"
+    default_num_predict = DEFAULT_OLLAMA_JUDGE_NUM_PREDICT
+
+    @traceable(run_type="llm", name="ollama_judge.judge")
+    def judge(self, observations_text: str, clauses: list[dict],
+              item: str) -> tuple[dict, dict]:
+        return self._judge(observations_text, clauses, item)
+
+
 class OllamaQualityLLM(OllamaLLM):
     """최종 답변 작성 전담 (상대적으로 큰 모델)."""
+
+    num_predict_env = "OLLAMA_QUALITY_NUM_PREDICT"
+    default_num_predict = DEFAULT_OLLAMA_QUALITY_NUM_PREDICT
 
     @traceable(run_type="llm", name="ollama_quality.write")
     async def write(self, query: str, collected: list[dict], attempt: int,

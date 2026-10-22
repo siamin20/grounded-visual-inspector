@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "purpose": "dev_verdict_consistency",
+  "split": "dev",
+  "condition": "A",
+  "seed": 20261020,
+  "sample_n": 20,
+  "repeat_count": 3,
+  "sampling": "proportional_stratified_item_truth",
+  "dataset_sha256": "445ce55bd3647b95677c4b372ae1ed6c3d26081b61ff57ee483b168e3dbd694b",
+  "stratum_counts": {
+    "bottle/normal": 3,
+    "bottle/defect": 3,
+    "hazelnut/normal": 2,
+    "hazelnut/defect": 3,
+    "metal_nut/normal": 2,
+    "metal_nut/defect": 2,
+    "screw/normal": 2,
+    "screw/defect": 3
+  },
+  "ids": [
+    "metal_nut-color-009",
+    "hazelnut-cut-004",
+    "bottle-contamination-011",
+    "bottle-good-012",
+    "bottle-broken_small-005",
+    "metal_nut-bent-009",
+    "hazelnut-crack-002",
+    "hazelnut-hole-001",
+    "screw-thread_side-010",
+    "hazelnut-good-001",
+    "screw-scratch_neck-004",
+    "metal_nut-good-002",
+    "metal_nut-good-003",
+    "screw-good-004",
+    "bottle-good-001",
+    "screw-thread_top-008",
+    "bottle-good-007",
+    "bottle-broken_large-000",
+    "hazelnut-good-000",
+    "screw-good-012"
+  ]
+}

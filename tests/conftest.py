@@ -35,6 +35,15 @@ def inspection_state() -> dict:
             "anomaly_seen": True,
             "regions": ["tl"],
             "summary": text,
+            "features": ["선형 긁힘"],
+            "checks": {
+                "scratch": True,
+                "break_or_crack": False,
+                "contamination": False,
+                "discoloration": False,
+                "bend_or_deformation": False,
+                "thread_damage": False,
+            },
             "model": "fake-cross",
         },
         "judgement": {

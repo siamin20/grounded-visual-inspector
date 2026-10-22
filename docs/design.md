@@ -1,7 +1,9 @@
 # 설계서 — 이미지 기반 제품 결함 판정 및 근거 검증 멀티에이전트
 
-작성일 2026-10-20, 최종 갱신 2026-10-21 (v2.2). 과제 유형: 2번 신규 프로젝트 (Base AI Agent 구조 이식).
-v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평가 계약을 사전 고정했다.
+작성일 2026-10-20, 최종 갱신 2026-10-21 (v2.5). 과제 유형: 2번 신규 프로젝트 (Base AI Agent 구조 이식).
+v2.5 변경: v2.4의 자원 제한 배치 checkpoint/재개 계약에
+더해, 실측에서 발견한 Qwen3 무제한 생성을
+`think=false`·역할별 출력 상한·전체 스트림 제한으로 차단했다.
 
 ---
 
@@ -50,7 +52,7 @@ v2.2 변경: 판독 불가를 `ABSTAIN`으로 분리하고 재검사·HITL·평�
 | gate 코드 규칙 | 유지 | 유지 |
 | replan_check 1회 상한 | 유지 (추가 크롭 task) | 유지 |
 | validate → write 반려 루프 | 유지 + 원문 대조 규칙 교체 | 강화 |
-| fast/quality 비용 분리 | 유지 (관찰 mini / 교차 검증 상위 모델) | 유지 |
+| fast/quality 비용 분리 | 유지 (텍스트 fast/quality 역할 분리, 실행 자원량 분리) | 유지 |
 | SQLite 세션 저장소 | 유지 + LangGraph checkpointer 추가 (HITL용) | 확장 |
 | Vue 채팅 UI + 프록시 | 유지 + 이미지 업로드·승인 버튼 추가 | 확장 |
 
@@ -121,33 +123,39 @@ route ──chat──▶ chat_answer
   └──inspection──▶ plan ▶ gate ▶ research ▶ replan_check ▶ analysis ▶ write ▶ [HITL approve] ▶ validate ▶ finalize
                                    │                                                              │ 불합격
                                    │  1단계 (병렬): Observer ∥ Cross-Checker                       └──▶ write (최대 2회)
-                                   │  2단계       : Spec-Judge (Observer 관찰문을 입력으로)
+                                   │  2단계       : Spec-Judge (시각 양성 관찰 근거를 입력으로)
                                    ▲ 부족 시 추가 크롭 (1회)
 ```
-research는 2단계다. Spec-Judge가 Observer의 관찰 문장을 쿼리로 쓰기 때문에 Observer와 동시에 돌 수 없다. 병렬인 것은 Observer와 Cross-Checker, 그리고 Observer 내부의 크롭 5회 호출이다.
+research는 2단계다. Spec-Judge가 Observer와 유효한 Cross-Checker가 만든 시각 양성 근거를 쿼리로 쓰기 때문에 두 분기와 동시에 돌 수 없다. Observer 양성이 있으면 그 관찰만 쓰고, Observer 양성이 없지만 구조 계약을 통과한 Cross-Checker가 양성이면 Cross-Checker 근거만 쓴다. 둘 다 양성이 아닐 때만 판독 가능한 Observer 음성 관찰을 정상 근거로 유지한다. 병렬인 것은 Observer와 Cross-Checker, 그리고 Observer 내부의 크롭 5회 호출이다.
 
 - route: 요청에 이미지가 있으면 inspection, 없으면 chat.
 - plan: MCP Prompt `inspection_prompt(item, lot)` 조회 → tasks `[observe, cross_check, spec_judge]`.
 - gate: 코드 규칙으로 불필요 task 제거. 품목(item)은 필수 입력이다(UI 드롭다운, 배치는 경로에서). VLM에게 품목까지 맞히게 하면 실패 지점이 하나 더 생기므로 범위에서 뺀다. 품목이 없으면 gate가 사용자에게 되묻고 종료.
 - research — compiled subgraph 3개
   1. Observer (1단계): MCP Tool `inspect_image(path, region="full")` 1회 + 4분할 크롭 4회 병렬. 출력에는 관찰 사실만(위치·크기·색·형태) 담는다. "불량/합격" 단어 금지(프롬프트 + 후처리 필터). 자유 문장과 함께 구조화 필드 `{anomaly_seen: bool|null, regions: [tl|tr|bl|br|center], features: [...]}`를 반드시 채운다. `null`은 정상 관찰이 아니라 판독 불가다.
-  2. Cross-Checker (1단계, Observer와 병렬): 같은 이미지를 좌우 반전해 체크리스트형 프롬프트로 재판독. openai 백엔드에서는 Observer가 `gpt-4o-mini`, Cross-Checker가 `gpt-4o`로 모델도 다르게 한다. ollama 백엔드는 모델이 하나라 반전+프롬프트 차이만 두며, 이 경우 독립성이 약하다는 점을 결과에 적는다. 출력은 같은 구조화 필드 `{anomaly_seen, regions}`(반전 좌표는 원좌표로 되돌려 기록).
-  3. Spec-Judge (2단계): Observer 관찰 문장을 쿼리로 기준서 RAG top-3 조항 검색 → 조항별 충족/위반 판정 + 결함 유형 후보.
+  2. Cross-Checker (1단계, Observer와 병렬): 같은 이미지를 좌우 반전해 체크리스트형 프롬프트로 재판독. openai 백엔드에서는 Observer가 `gpt-4o-mini`, Cross-Checker가 `gpt-4o`로 모델도 다르게 한다. ollama 백엔드는 모델이 하나라 반전+프롬프트 차이만 두며, 이 경우 독립성이 약하다는 점을 결과에 적는다. 출력은 `{anomaly_seen, regions, features, checks}`이며 `checks`는 `scratch|break_or_crack|contamination|discoloration|bend_or_deformation|thread_damage` 여섯 키를 정확히 한 번씩 가진 boolean 객체다. `anomaly_seen`은 `any(checks.values())`와 일치해야 하고, 양성에는 위치·특징이 필요하며 음성의 위치·특징은 빈 배열이어야 한다. 키 누락·추가, boolean 이외 값, `checks`·`anomaly_seen`·`regions`·`features` 구조 필드 간 모순은 `C?`로 닫는다. 반전 좌표는 원좌표로 되돌려 기록한다. 자유문장 요약의 의미와 구조 필드가 실제 이미지에 비추어 참인지는 이 형식 검사만으로 증명하지 못한다.
+     서술용 `text`만 생략됐고 위 네 구조 필드가 완전히 일치하는 경우에만
+     `checks`·`features`에서 한국어 요약을 결정론적으로 만든다. 구조 모순을
+     요약으로 복구하지 않으며, 생성한 요약에는
+     `summary_synthesized=true`를 남겨 판정에서는 `C?`로 유지한다. 원문이
+     없는 응답을 `C-`로 승격시켜 확실한 합격으로 보내지 않는다.
+  3. Spec-Judge (2단계): 정답 라벨·파일 경로를 제외하고, 양성 Observer 관찰과 `C+` Cross-Checker 요약·특징을 결정론적으로 합성한 문장을 쿼리로 기준서 RAG top-3 조항 검색 → 조항별 충족/위반 판정 + 결함 유형 후보. 양성이 없을 때는 판독 가능한 Observer 음성 관찰을 정상 근거로 쓴다.
 - replan_check: 아래 Observer 집계가 `O?`일 때만 center 크롭 task를 1회 추가한다. 단일 crop의 판독 실패만으로 재계획하지 않는다. center 이후에도 `O?`이면 analysis가 `ABSTAIN`한다.
 - analysis(코드 규칙, LLM 아님): After(v2)의 판독 가능 여부·합의·근거를 아래 R1 계약으로 조합한다. B0/B1은 RAG가 없는 비교군이므로 이 표의 `V+` 요건을 적용하지 않고, VLM이 판독하지 못했거나 출력이 무효일 때만 ABSTAIN한다.
   - 판독 가능한 관찰은 `anomaly_seen`이 실제 bool이고 text가 `판독 불가`가 아닌 경우다.
   - `O+`: 판독 가능한 `true`가 1개 이상. `O-`: `true`가 없고 `full=false` 또는 서로 다른 사분면 3개 이상이 `false`. 나머지는 `O?`다. 3개 사분면은 라벨을 보지 않고 정한 75% 공간 커버리지 경계다. center의 `false`는 정상 커버리지를 대신하지 않지만 `true`는 `O+` 증거다.
   - 이상 영역 합집합에는 `anomaly_seen=true`인 관찰의 region만 넣는다. 정상·판독 불가 관찰의 region은 양성 합의에 쓰지 않는다.
-  - Cross-Checker는 `C+|C-|C?`로 구분한다. 빈 값·`null`은 운영 중 `C?`, 명시적 `no_cross` ablation만 `C-skip`이다.
+  - 사분면 crop의 source region은 호출자가 이미 알고 있으므로 양성 응답의 `regions`는 그 source region 하나와 정확히 같아야 한다. 다른 좌표·복수 좌표를 반환하면 판독 불가로 닫고, 음성 crop의 `regions`는 빈 배열로 정규화한다. 모델이 임의로 만든 좌표가 Cross-Checker와 거짓 중첩을 만들지 못하게 하는 경계다.
+  - Cross-Checker는 위 여섯 항목 계약까지 검증해 `C+|C-|C?`로 구분한다. 빈 값·`null`·계약 불일치는 운영 중 `C?`, 명시적 `no_cross` ablation만 `C-skip`이다.
   - `V+`는 실제 기준서에 있는 위반 조항 1개 이상과 type_map의 결함 유형이 함께 검증된 경우다. 빈 판정은 `V0`, 형식 오류·교정 불가능한 모순은 `V?`다.
 
 | Observer | Cross | Spec-Judge | 결과 |
 |---|---|---|---|
 | 임의 | 임의 | `V?` | `ABSTAIN/low`, `validation_failure` |
-| `O+` | `C+` | `V+` | 양성 region이 겹치면 `REJECT/high`, 아니면 `REJECT/low` |
-| `O+` | `C-|C?` | `V+` | `REJECT/low` |
-| `O?` | `C+` | `V+` | `REJECT/low` |
-| `O-` | `C+` | `V+` | `REJECT/low` |
+| `O+` | `C+` | `V+` | 양성 region이 겹치면 `REJECT/high`, 아니면 `ABSTAIN/low`, `evidence_conflict` |
+| `O+` | `C-|C?` | `V+` | `ABSTAIN/low`, `evidence_conflict` |
+| `O?` | `C+` | `V+` | `ABSTAIN/low`, `evidence_conflict` |
+| `O-` | `C+` | `V+` | `ABSTAIN/low`, `evidence_conflict` |
 | 시각 양성(`O+` 또는 `C+`) | 임의 | `V0` | `ABSTAIN/low`, `ungrounded_anomaly` |
 | 시각 양성 없음 | 임의 | `V+` | `ABSTAIN/low`, `evidence_conflict` |
 | `O-` | `C-` | `V0` | `PASS/high` |
@@ -183,6 +191,19 @@ Base의 `find_prompt / find_resource_template` 멀티 서버 탐색과 docs deco
 ### 4.3 LLM/VLM 백엔드 (의존성 주입)
 `LLM_BACKEND=fake | ollama | openai` 유지. VLM도 같은 토글: fake(`/test/<label>/` 폴더 라벨을 우선 읽고 등록 파일은 바이트 SHA-256으로 역조회하는 label-leaking 결정론 백엔드, 테스트·데모용, 실평가는 fake 거부) / ollama `qwen2.5vl:3b` / openai `gpt-4o-mini`(관찰) + `gpt-4o`(교차 검증). 텍스트 노드(plan/write)는 기존 fast/quality 분리 그대로.
 
+주 실모델 실험은 결과를 보기 전 Ollama로 고정한다. 텍스트 fast는
+`qwen3:0.6b`, Spec-Judge와 quality는 각각 독립 역할의 `qwen3:8b`,
+Observer와 Cross-Checker는 모두
+`qwen2.5vl:3b`를 쓴다. OpenAI 결과와 동등한 모델 성능이나 상용 API로의
+일반화를 주장하지 않는다.
+
+Ollama 텍스트 호출은 판정과 보고서에 불필요한 내부 추론을 넣지 않도록
+`think=false`로 고정하고, fast와 Judge는 각각
+`num_predict=512`, quality는 `num_predict=2048`, 전체 스트림은 300초로
+제한한다. 출력 상한에 닿아
+`done_reason=length`로 끝나거나
+완료 기록 없이 닫힌 응답은 부분 JSON을 채택하지 않고 오류로 기록한다.
+
 ### 4.4 이미지 입력 경로와 UI
 Base `/chat`은 텍스트만 받는다. 다음을 추가한다.
 - `POST /inspect` (multipart): 이미지 파일 + 필수 품목 + `thread_id`. `session_id`는 이전 클라이언트 호환용 별칭으로만 받는다. 서버가 `data/uploads/{thread_id}/{uuid}.png`에 저장하고 그래프 state에 `image_path`를 넣어 `/chat/stream`과 같은 SSE 경로로 진행 이벤트를 보낸다.
@@ -201,7 +222,7 @@ LangGraph `interrupt()`는 checkpointer와 thread_id가 필요하다. Base에는
 - 서버 재시작 후 재개: SQLite checkpointer에 저장된 같은 namespace·`thread_id`·`approval_id`로 가능하다. L1 테스트에 포함.
 
 ### 4.6 RAG
-- 임베딩: OpenAI `text-embedding-3-small`(실측) 또는 Ollama 로컬 임베딩(무료 경로). 벡터 스토어는 외부 DB 없이 작동하는 인메모리 `SpecIndex`이며, NumPy cosine 유사도로 상위 조항을 검색한다. 색인 단위는 기준서 조항 1개 = 1 청크이고, 메타데이터는 `{item, defect_type, clause_id}`다. 품목을 먼저 필터한 다음 유사도 검색한다.
+- 임베딩: 주 실험은 Ollama `nomic-embed-text`(운영 기본)와 `bge-m3`(R6 비교용) 2종을 사전 고정해 비교한다. OpenAI `text-embedding-3-small`은 선택적 비교 경로로만 남기고 주 결론에 섞지 않는다. 벡터 스토어는 외부 DB 없이 작동하는 인메모리 `SpecIndex`이며, NumPy cosine 유사도로 상위 조항을 검색한다. 색인 단위는 기준서 조항 1개 = 1 청크이고, 메타데이터는 `{item, defect_type, clause_id}`다. 품목을 먼저 필터한 다음 유사도 검색한다.
 - 규모에 대한 솔직한 전제: 현재 기준서 4개·조항 25개 수준에서는 전문을 프롬프트에 넣는 B1이 RAG와 비슷하거나 나을 수 있다. RAG의 가치는 품목이 수십·수백 개로 늘어 전문 삽입이 토큰 한도와 비용을 넘을 때 생긴다. 그래서 B1을 반드시 같이 측정하고, B1이 이기면 그렇게 보고한다.
 
 ### 4.7 모듈화
@@ -358,14 +379,26 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 - R6 dev B0+A의 nominal 요청은 `52×(1+10)+setup 1=573`, R8
   held-out B0+B1+A는 `140×(1+1+10)+setup 1=1,681`회다. dev
   ablation은 각 조건을 별도 실행하므로 이 두 suite 수에 포함하지 않는다.
-- 추정 비용은 모델 응답 토큰과 manifest의 `provider-effective-v2`
-  가격표로 계산하며 실제 청구액을 보증하지 않는다. 유료 조건은
-  한 suite의 15 USD `estimated_usd` soft 상한을 공유한다.
-- 예산 가드는 setup과 각 샘플 종료 후 usage를 합산한다. 따라서
-  setup 응답 1회 또는 한 샘플의 다중 요청 추정 비용만큼 상한을
-  넘을 수 있으며, 절대적인 결제 차단이 아니다.
-- 로컬 축 `qwen2.5vl:3b`: dev 52장에서 B0와 A만. API 과금은
-  0이지만 계산 자원·시간을 사용하며 `compute_proxy_usd`로 분리해 P2로 보고한다.
+- 위 573회는 한 프로세스에서 A 색인을 한 번만 만드는 알고리즘
+  nominal이다. 자원 제한 배치는 A 재개마다 SpecIndex를 다시
+  만들어 embedding setup 1회가 추가된다. 추가 호출·토큰·지연·
+  계산 proxy를 누적하고, 이 실행 overhead를 샘플별 추론 비용과
+  구분해 보고한다.
+- 주 실측은 Ollama 로컬 축이다. API 과금은 0이고 계산 자원·시간은
+  `compute_proxy_usd`로 분리해 보고한다. 실행 모델은 fast `qwen3:0.6b`,
+  Judge/quality `qwen3:8b`, Observer/Cross-Checker `qwen2.5vl:3b`, 운영 embedding
+  `nomic-embed-text`로 고정한다.
+- dev 정식 B0/A 실측은 모두 `--batch-size 4`로 고정 roster의
+  prefix만 실행하고
+  정상 배치 경계에서만 `paused`로 남긴다. `--resume`은 checkpoint
+  hash, ID 순서, 누적 usage, 배치 크기, 코드·데이터·
+  기준서·모델·설정이
+  동일할 때만 다음 ID를 append한다. Ctrl+C·비정상 종료·usage
+  미확정은 `failed`로 종료하여 재개하지 않는다. 전체 roster가
+  모일 때만 정식 summary와 `complete`를 생성한다.
+- OpenAI 경로는 코드에 선택지로 유지하지만 이 실험의 주 결과에
+  섞지 않는다. 후속으로 실행할 경우에만 고정 가격표의 `estimated_usd`와
+  suite soft 상한을 적용하고, 실제 청구액 상한이 아님을 밝힌다.
 - 반복: 5.4의 일관성 측정만 3회(20장). 주 결과는 1회 실행이며 temperature 0.
 - 고정 조건: 같은 이미지, 같은 참조 이미지, 같은 날 실행. `SUPERVISOR_VERSION=v1`을 B0로 재구성해 Base의 버전 토글을 Before 스위치로 쓴다.
 - B0와 A는 모델 강도·호출 수·crop·교차검증·RAG·규칙 판정·validate가 함께
@@ -405,7 +438,9 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
    함께 달라 retrieval 단독 효과를 식별하지 못한다. 그 경우 RAG는 확장성
    투자로만 설명하고, 고유 효과는 향후 같은 파이프라인 대조군으로 확인한다.
 6. MVTec의 통제 환경: 조명·배경이 균일한 벤치마크. 이 프로젝트가 증명하는 것은 "파이프라인이 설계대로 신뢰성을 올리는가"이고 현장 적용 성능이 아니다.
-7. 소형 로컬 VLM 품질: 3b 모델 Before가 매우 낮을 수 있음. After 상승폭이 과장돼 보일 수 있으므로 gpt-4o-mini 축 결과를 주 결과로 삼는다.
+7. 소형 로컬 VLM 품질: 3B 모델 B0가 매우 낮으면 A의 상승폭이 부풀려
+   보일 수 있다. 그러므로 Ollama 축의 동일 모델 내 B0/A 비교로만 해석하고,
+   GPT 계열이나 현장 모델로 일반화하지 않는다.
 8. 환각률 사람 채점이 1인·20쌍: 블라인드와 stage 추측 기록을 써도 채점자
    편향이 남고, 관측 5%는 모집단 5% 상한을 뜻하지 않는다.
 9. HITL 중단과 상태 복원: checkpointer로 해결하지만 배치 평가에서는 auto_approve라 사람 판단의 효과는 측정되지 않는다.
@@ -435,12 +470,12 @@ validate의 효과를 측정하면 After가 구조적으로 좋아지는 순환�
 | Day3 12–13 | PPT(문제→개선→수치→한계), fake 백엔드 데모 리허설, 데모 GIF 녹화 | 발표 |
 | Day3 13:00 / 14:00 | 제출 / 발표 | |
 
-우선순위: P0 = 4.1·4.5 전체 + L1 + B0 vs A + ADR. P1 = B1, 독립 환각 측정, L4, ablation. P2 = L5 교란, qwen 축, `/inspect` 업로드 UI, 커버리지 곡선. 시간 부족 시 P2부터 버리고 "미수행"으로 명시한다. 업로드 UI가 밀리면 데모는 `image_path` 경로로 한다.
+우선순위: P0 = 4.1·4.5 전체 + L1 + Ollama B0 vs A + ADR. P1 = B1, 독립 환각 측정, L4, ablation. P2 = L5 교란, `/inspect` 업로드 UI, 커버리지 곡선. 시간 부족 시 P2부터 버리고 "미수행"으로 명시한다. 업로드 UI가 밀리면 데모는 `image_path` 경로로 한다.
 
 ---
 
 ## 10. 데모와 발표 리스크
-- 라이브 데모는 fake VLM 백엔드로 결정론 경로를 먼저 보여주고(API 장애와 무관하게 전 노드 동작), 이어서 openai 축으로 실제 이미지 1장을 돌린다.
+- 라이브 데모는 fake VLM 백엔드로 결정론 경로를 먼저 보여주고(외부 모델 장애와 무관하게 전 노드 동작), 이어서 Ollama 축으로 dev 이미지 1장을 돌린다.
 - 데모 GIF를 Day3 오전에 녹화해 PPT에 넣는다. 네트워크가 죽어도 흐름은 보여줄 수 있다.
 - HITL 승인 장면은 데모의 핵심이므로 `confidence=low`가 확실히 나오는 dev 이미지 1장을 미리 골라 둔다.
 

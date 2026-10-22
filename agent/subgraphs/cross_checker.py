@@ -10,6 +10,7 @@ from langsmith import traceable
 from agent.retry import with_retry
 from agent.state import AgentState
 from agent.vision.crop import unflip_regions
+from agent.vision.reference import normal_reference_path
 from agent.nodes.common import _merge_usages, _vlm_result_usage
 
 
@@ -59,6 +60,7 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
         return _empty_result()
 
     server = await deps.mcp.find_tool("inspect_image")
+    reference_path = normal_reference_path(state["item"])
     started = time.perf_counter()
     result, retries = await with_retry(
         deps.mcp.call_tool,
@@ -69,7 +71,7 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
             "region": "full",
             "style": "checklist",
             "flip": True,
-            "reference_path": None,
+            "reference_path": reference_path,
             "model_role": "cross",
         },
         server=server,
@@ -81,14 +83,23 @@ async def cross_checker_node(state: AgentState, deps: Any) -> dict:
         "anomaly_seen": result.get("anomaly_seen"),
         "regions": restored_regions,
         "summary": str(result.get("text", "")),
+        "features": list(result.get("features") or []),
+        "checks": (
+            dict(result["checks"])
+            if isinstance(result.get("checks"), dict)
+            else None
+        ),
         "model": result.get("model") if isinstance(result.get("model"), str) else None,
     }
+    if result.get("summary_synthesized") is True:
+        cross_check["summary_synthesized"] = True
     done_event = {
         "type": "CrossCheckDone",
         "skipped": False,
         "summary": cross_check["summary"],
         "anomaly_seen": cross_check["anomaly_seen"],
         "regions": restored_regions,
+        "checks": cross_check["checks"],
     }
     usage = _merge_usages(_vlm_result_usage(result))
     return {
