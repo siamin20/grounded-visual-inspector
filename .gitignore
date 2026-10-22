@@ -21,3 +21,6 @@ eval/results/*
 !eval/results/.gitkeep
 
 .DS_Store
+
+# 발표용 PowerPoint는 로컬 산출물로만 관리한다.
+docs/slides/grounded-visual-inspector-presentation.pptx
