@@ -8,7 +8,7 @@
 | 프로젝트 주제 | VLM 관찰을 검사 기준서 RAG·교차검증·규칙 판정·HITL로 검증하는 제품 외관검사 서비스 |
 | 대상 품목 | MVTec AD의 `screw`, `bottle`, `metal_nut`, `hazelnut` |
 | 저장소 | [siamin20/grounded-visual-inspector](https://github.com/siamin20/grounded-visual-inspector) |
-| 현재 상태 | R6.6 dev B0/A 52장 실측 완료(A 성능 개선 실패), RAG 오프라인 후보 비교·A+ dev 사후 결합 후보 확인, held-out 미실행 |
+| 현재 상태 | R6.6 dev 평가 완료, A 성능 개선 실패, held-out 미실행 |
 
 ## 30초 요약
 
@@ -91,22 +91,17 @@ MVTec 외부 라벨에 대한 종단 성능과 Cross-Checker 일치율로 별도
 
 ## 3. 실행 화면
 
-아래 필수 네 장과 선택 비교 한 장이 공고의 “기능별 화면 캡처 + 최종 실행 화면”에 해당한다.
-아래 UI 4장은 외부 호출이 없는 fake 백엔드로 기능 흐름을 재현한 캡처이며,
-성능 수치는 별도 Ollama 실측 결과만 사용했다.
+UI 화면은 fake 백엔드로 기능 흐름을 재현했다. 성능표는 Ollama 실측 결과다.
 
 1. `docs/images/01-upload.jpg` — 품목 선택과 이미지 업로드
 2. `docs/images/02-agent-events.jpg` — Observer·Cross-Checker·Spec-Judge 진행 이벤트
 3. `docs/images/03-hitl.jpg` — ApprovalRequired와 승인·반려 버튼
 4. `docs/images/04-final-report.jpg` — 판정·근거 조항·조치가 포함된 최종 보고서
-5. `docs/images/05-before-after.jpg` — R6.5 당시 동일 입력 B0/A 중간 비교(역사 기록, 최신 수치는 아래 R6.6 표)
 
 ![이미지 업로드 화면](docs/images/01-upload.jpg)
 ![멀티에이전트 진행 이벤트](docs/images/02-agent-events.jpg)
 ![HITL 승인·반려 화면](docs/images/03-hitl.jpg)
 ![최종 검사 보고서](docs/images/04-final-report.jpg)
-> `05-before-after.jpg`는 R6.5 중간 캡처이므로 발표 화면으로 사용하지 않는다.
-> 최신 R6.6 비교는 아래 표와 결과 요약 문서를 사용한다.
 
 ## 4. 실행 방법
 
@@ -185,15 +180,15 @@ dev 탐색 결과이므로 held-out 가설 결론은 아니지만, **현재 3B �
 대칭으로 맞추고 Cross 계약을 강화한 보정은 정상 정답을 1장 늘렸지만,
 3B VLM의 결함 관찰 품질을 회복하지 못했다.
 
-상세 지표·모델·무결성 정보는 [R6.6 dev 공개 요약](docs/results/r6_6_dev_summary.md)에
-고정했다. 원시 JSONL은 이미지 경로를 포함하므로 Git에는 올리지 않는다.
+상세 지표와 실행 조건은 [R6.6 dev 결과](docs/results/r6_6_dev_summary.md)에 정리했다.
+원시 JSONL은 로컬 이미지 경로를 포함해 Git에는 올리지 않았다.
 
 ### A+ 후보 — dev 사후 탐색
 
 같은 run의 저장된 B0/A 행을 이미지 재호출 없이 결합했다. 규칙은
 `B0=REJECT`면 REJECT, 그렇지 않고 `A=PASS`면 PASS, 나머지는
-ABSTAIN이다. 실행 중 정답 라벨을 쓰지 않는 결정론적 정책이지만,
-결과를 본 뒤 정한 **post-hoc dev 후보**이며 현재 A 그래프의 성과가 아니다.
+ABSTAIN이다. 실행 중 정답 라벨은 쓰지 않았지만 결과를 확인한 뒤 만든
+dev 사후 분석이며 현재 A 그래프에는 포함되지 않는다.
 
 | 지표 | B0 | A | A+ 사후 결합·그래프 미통합 |
 |---|---:|---:|---:|
@@ -208,8 +203,7 @@ A+는 B0 대비 Accuracy `+9.62%p`, Balanced Accuracy `+10.42%p`였지만
 짝지은 McNemar exact 검정은 `p=0.0625`로 유의하지 않았다. B0와 A를
 둘 다 실행해야 하며 결합 end-to-end 지연·자원은 아직 미측정이다. 또한
 B0가 보류한 실제 결함 1건을 A의 `PASS`로 바꾸는 미검
-위험도 확인됐다. held-out으로 재현하지 않았으므로 “정확도 개선 입증”이
-아니라 **다음 동결 후보**로만 보고한다.
+위험도 확인됐다. held-out으로 재현하지 않아 후속 실험 후보로만 남겼다.
 
 이전 R6 실행에서 저장된 A의 실제 RAG query만 다시 사용한 오프라인
 embedding 후보 비교에서 결함 28건 top-3 결과는
@@ -304,17 +298,6 @@ web_demo_server.py     Vue 화면 프록시(:8600)
 - [ADR: 코드 합의 규칙](docs/adr/0002-consensus-as-code-rule.md)
 - [ADR: HITL 위치](docs/adr/0003-hitl-between-write-and-validate.md)
 - [ADR: VLM MCP 격리](docs/adr/0004-vlm-behind-mcp-tool.md)
-
-## 제출 전 마지막 확인
-
-- [x] 반·번호·성명 입력
-- [x] 실제 프로젝트 화면 캡처 4장 추가
-- [x] 선택 보너스용 동일 입력 B0/A 비교 화면 추가
-- [x] GitHub 저장소 Public 및 링크 접속 확인
-- [x] 최종 변경사항 커밋·푸시
-- [x] fake 전체 회귀 통과
-- [x] dev B0/A·RAG·일관성 결과와 한계 공개
-- [x] held-out 미열람 유지
 
 ## Attribution
 
