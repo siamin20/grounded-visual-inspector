@@ -1,0 +1,662 @@
+{
+  "analysis_git_commit": "41ab65d3bd51e8185f1ad429cd563ba515015e92",
+  "analysis_type": "post_hoc_dev_cascade",
+  "claim_status": "exploratory_only",
+  "comparison": {
+    "accuracy_delta_vs_b0": 0.0961538461538462,
+    "balanced_accuracy_delta_vs_b0": 0.10416666666666669,
+    "mcnemar_vs_b0": {
+      "defect": {
+        "b": 0,
+        "both_correct": 15,
+        "both_wrong": 13,
+        "c": 0,
+        "n": 28,
+        "p_value": 1.0
+      },
+      "normal": {
+        "b": 0,
+        "both_correct": 0,
+        "both_wrong": 19,
+        "c": 5,
+        "n": 24,
+        "p_value": 0.0625
+      },
+      "overall": {
+        "b": 0,
+        "both_correct": 15,
+        "both_wrong": 32,
+        "c": 5,
+        "n": 52,
+        "p_value": 0.0625
+      }
+    },
+    "paired_balanced_accuracy_vs_b0": {
+      "a": 0.26785714285714285,
+      "alternative": "two-sided",
+      "b": 0.37202380952380953,
+      "bootstrap_method": "paired_stratified_percentile",
+      "bootstrap_samples": 10000,
+      "confidence_level": 0.95,
+      "defect_n": 28,
+      "delta": 0.10416666666666669,
+      "delta_ci95_high": 0.1875,
+      "delta_ci95_low": 0.04166666666666666,
+      "exact_permutation_max_pairs": 16,
+      "metric": "balanced_accuracy",
+      "n": 52,
+      "normal_n": 24,
+      "p_value": 0.0625,
+      "permutation_method": "exact",
+      "permutation_samples": 32,
+      "requested_permutation_samples": 20000,
+      "seed": 20261020,
+      "strata": {
+        "defect": 28,
+        "normal": 24
+      },
+      "swappable_pairs": 5
+    }
+  },
+  "generated_at": "2026-10-22T03:35:21.934745Z",
+  "heldout_validated": false,
+  "limitations": [
+    "B0와 A를 모두 실행해야 하며 결합 end-to-end 지연·자원은 미측정",
+    "dev 결과를 본 뒤 정의한 사후 정책",
+    "held-out 미검증"
+  ],
+  "metric_semantics": {
+    "selective_tp_tn_fp_fn": "자동 판정분만 포함하고 ABSTAIN은 제외",
+    "tp_tn_fp_fn": "전체 roster 기준이며 ABSTAIN·오류·누락을 실패에 포함"
+  },
+  "metrics": {
+    "A": {
+      "abstain_n": 41,
+      "abstain_rate": 0.7884615384615384,
+      "accuracy": 0.11538461538461539,
+      "balanced_accuracy": 0.125,
+      "coverage": 0.21153846153846154,
+      "defect_abstain_n": 23,
+      "defect_abstain_rate": 0.8214285714285714,
+      "defect_coverage": 0.17857142857142858,
+      "defect_error_n": 0,
+      "defect_failure_rate": 1.0,
+      "defect_invalid_n": 0,
+      "defect_missing_n": 0,
+      "defect_n": 28,
+      "defect_observed_n": 28,
+      "defect_selective_n": 5,
+      "error_n": 0,
+      "expected_n": 52,
+      "fn": 28,
+      "fnr": 1.0,
+      "fp": 18,
+      "fpr": 0.75,
+      "invalid_n": 0,
+      "missing_n": 0,
+      "n": 52,
+      "normal_abstain_n": 18,
+      "normal_abstain_rate": 0.75,
+      "normal_coverage": 0.25,
+      "normal_error_n": 0,
+      "normal_failure_rate": 0.75,
+      "normal_invalid_n": 0,
+      "normal_missing_n": 0,
+      "normal_n": 24,
+      "normal_observed_n": 24,
+      "normal_selective_n": 6,
+      "observed_n": 52,
+      "result_n": 52,
+      "selective_accuracy": 0.5454545454545454,
+      "selective_f1": 0.0,
+      "selective_fn": 5,
+      "selective_fp": 0,
+      "selective_n": 11,
+      "selective_precision": 0.0,
+      "selective_recall": 0.0,
+      "selective_tn": 6,
+      "selective_tp": 0,
+      "tn": 6,
+      "tp": 0
+    },
+    "A+": {
+      "abstain_n": 23,
+      "abstain_rate": 0.4423076923076923,
+      "accuracy": 0.38461538461538464,
+      "balanced_accuracy": 0.37202380952380953,
+      "coverage": 0.5576923076923077,
+      "defect_abstain_n": 12,
+      "defect_abstain_rate": 0.42857142857142855,
+      "defect_coverage": 0.5714285714285714,
+      "defect_error_n": 0,
+      "defect_failure_rate": 0.4642857142857143,
+      "defect_invalid_n": 0,
+      "defect_missing_n": 0,
+      "defect_n": 28,
+      "defect_observed_n": 28,
+      "defect_selective_n": 16,
+      "error_n": 0,
+      "expected_n": 52,
+      "fn": 13,
+      "fnr": 0.4642857142857143,
+      "fp": 19,
+      "fpr": 0.7916666666666666,
+      "invalid_n": 0,
+      "missing_n": 0,
+      "n": 52,
+      "normal_abstain_n": 11,
+      "normal_abstain_rate": 0.4583333333333333,
+      "normal_coverage": 0.5416666666666666,
+      "normal_error_n": 0,
+      "normal_failure_rate": 0.7916666666666666,
+      "normal_invalid_n": 0,
+      "normal_missing_n": 0,
+      "normal_n": 24,
+      "normal_observed_n": 24,
+      "normal_selective_n": 13,
+      "observed_n": 52,
+      "result_n": 52,
+      "selective_accuracy": 0.6896551724137931,
+      "selective_f1": 0.7692307692307693,
+      "selective_fn": 1,
+      "selective_fp": 8,
+      "selective_n": 29,
+      "selective_precision": 0.6521739130434783,
+      "selective_recall": 0.9375,
+      "selective_tn": 5,
+      "selective_tp": 15,
+      "tn": 5,
+      "tp": 15
+    },
+    "B0": {
+      "abstain_n": 29,
+      "abstain_rate": 0.5576923076923077,
+      "accuracy": 0.28846153846153844,
+      "balanced_accuracy": 0.26785714285714285,
+      "coverage": 0.4423076923076923,
+      "defect_abstain_n": 13,
+      "defect_abstain_rate": 0.4642857142857143,
+      "defect_coverage": 0.5357142857142857,
+      "defect_error_n": 0,
+      "defect_failure_rate": 0.4642857142857143,
+      "defect_invalid_n": 0,
+      "defect_missing_n": 0,
+      "defect_n": 28,
+      "defect_observed_n": 28,
+      "defect_selective_n": 15,
+      "error_n": 0,
+      "expected_n": 52,
+      "fn": 13,
+      "fnr": 0.4642857142857143,
+      "fp": 24,
+      "fpr": 1.0,
+      "invalid_n": 0,
+      "missing_n": 0,
+      "n": 52,
+      "normal_abstain_n": 16,
+      "normal_abstain_rate": 0.6666666666666666,
+      "normal_coverage": 0.3333333333333333,
+      "normal_error_n": 0,
+      "normal_failure_rate": 1.0,
+      "normal_invalid_n": 0,
+      "normal_missing_n": 0,
+      "normal_n": 24,
+      "normal_observed_n": 24,
+      "normal_selective_n": 8,
+      "observed_n": 52,
+      "result_n": 52,
+      "selective_accuracy": 0.6521739130434783,
+      "selective_f1": 0.7894736842105263,
+      "selective_fn": 0,
+      "selective_fp": 8,
+      "selective_n": 23,
+      "selective_precision": 0.6521739130434783,
+      "selective_recall": 1.0,
+      "selective_tn": 0,
+      "selective_tp": 15,
+      "tn": 0,
+      "tp": 15
+    }
+  },
+  "policy": {
+    "description": "B0 REJECT 우선, 그 외 A PASS 수용, 그 외 ABSTAIN",
+    "order": [
+      "B0_REJECT",
+      "A_PASS",
+      "ABSTAIN"
+    ],
+    "uses_ground_truth_at_runtime": false
+  },
+  "policy_id": "b0_reject_then_a_pass_v1",
+  "post_hoc_dev": true,
+  "primary_hypothesis": false,
+  "rows": [
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "screw-good-004",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-good-005",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "PASS",
+      "id": "screw-good-007",
+      "selected_source": "A"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "PASS",
+      "id": "screw-good-010",
+      "selected_source": "A"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-good-012",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-good-015",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "PASS",
+      "id": "screw-scratch_head-004",
+      "selected_source": "A"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-scratch_head-005",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-scratch_neck-003",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-scratch_neck-004",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "screw-thread_side-001",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "screw-thread_side-010",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "screw-thread_top-008",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "screw-thread_top-010",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-good-000",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-good-001",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-good-007",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-good-012",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-good-015",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-good-018",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-broken_large-000",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-broken_large-010",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-broken_small-003",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-broken_small-005",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-contamination-003",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "bottle-contamination-011",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-good-002",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-good-003",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-good-004",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-good-007",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-good-010",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-good-017",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-bent-000",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-bent-009",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-color-002",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-color-009",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-scratch-001",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "metal_nut-scratch-010",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "PASS",
+      "id": "hazelnut-good-000",
+      "selected_source": "A"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-good-001",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "PASS",
+      "id": "hazelnut-good-004",
+      "selected_source": "A"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "PASS",
+      "id": "hazelnut-good-006",
+      "selected_source": "A"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "hazelnut-good-008",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "hazelnut-good-009",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-crack-002",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-crack-003",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-cut-004",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "PASS",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-cut-010",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-hole-001",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "REJECT",
+      "cascade_error": null,
+      "cascade_verdict": "REJECT",
+      "id": "hazelnut-hole-010",
+      "selected_source": "B0"
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "hazelnut-print-009",
+      "selected_source": null
+    },
+    {
+      "a_verdict": "ABSTAIN",
+      "b0_verdict": "ABSTAIN",
+      "cascade_error": null,
+      "cascade_verdict": "ABSTAIN",
+      "id": "hazelnut-print-010",
+      "selected_source": null
+    }
+  ],
+  "run_id": "20261022T112100000000Z-r66dev",
+  "schema_version": 1,
+  "source_hashes": {
+    "A_result": "a433a459e0162584c6e980fe37aa49b9a9ed4e3a9d18cefa99024186da97c1c2",
+    "B0_result": "59808d0d70d9d5632b9a44c2c3f27a2850fee3165a2624b513e178dff15bc6e0",
+    "analysis_code": "107a010913d0986212aea4da13c66cd945bd5e6d0eccf8d3254cd32a2552b0c1",
+    "dataset": "445ce55bd3647b95677c4b372ae1ed6c3d26081b61ff57ee483b168e3dbd694b",
+    "manifest": "3e314a28198f8b7bcf3a80b80a03ec6d05988f94d33231d71594fe601487c4d4"
+  },
+  "split": "dev",
+  "warning": "dev 결과 확인 후 정의한 탐색적 정책이며 primary 가설이나 held-out 성능 근거로 사용할 수 없습니다."
+}

@@ -8,7 +8,7 @@
 | 프로젝트 주제 | VLM 관찰을 검사 기준서 RAG·교차검증·규칙 판정·HITL로 검증하는 제품 외관검사 서비스 |
 | 대상 품목 | MVTec AD의 `screw`, `bottle`, `metal_nut`, `hazelnut` |
 | 저장소 | [siamin20/grounded-visual-inspector](https://github.com/siamin20/grounded-visual-inspector) |
-| 현재 상태 | R6.5 dev B0/A 스냅샷 공개(성능 개선 미입증), R6.6 재측정 전 성능 NO-GO·held-out 미실행 |
+| 현재 상태 | R6.6 dev B0/A 52장 실측 완료(A 성능 개선 실패), RAG 오프라인 후보 비교·A+ dev 사후 결합 후보 확인, held-out 미실행 |
 
 ## 30초 요약
 
@@ -99,13 +99,14 @@ MVTec 외부 라벨에 대한 종단 성능과 Cross-Checker 일치율로 별도
 2. `docs/images/02-agent-events.jpg` — Observer·Cross-Checker·Spec-Judge 진행 이벤트
 3. `docs/images/03-hitl.jpg` — ApprovalRequired와 승인·반려 버튼
 4. `docs/images/04-final-report.jpg` — 판정·근거 조항·조치가 포함된 최종 보고서
-5. `docs/images/05-before-after.jpg` — 동일 입력 B0/A 결과 비교(선택 보너스)
+5. `docs/images/05-before-after.jpg` — R6.5 당시 동일 입력 B0/A 중간 비교(역사 기록, 최신 수치는 아래 R6.6 표)
 
 ![이미지 업로드 화면](docs/images/01-upload.jpg)
 ![멀티에이전트 진행 이벤트](docs/images/02-agent-events.jpg)
 ![HITL 승인·반려 화면](docs/images/03-hitl.jpg)
 ![최종 검사 보고서](docs/images/04-final-report.jpg)
-![동일 입력 B0/A 비교](docs/images/05-before-after.jpg)
+> `05-before-after.jpg`는 R6.5 중간 캡처이므로 발표 화면으로 사용하지 않는다.
+> 최신 R6.6 비교는 아래 표와 결과 요약 문서를 사용한다.
 
 ## 4. 실행 방법
 
@@ -143,7 +144,7 @@ LLM_BACKEND=fake VLM_BACKEND=fake EMBED_BACKEND=fake \
   .venv/bin/python3 -m pytest -q
 ```
 
-최신 전체 회귀 결과: **665 passed in 31.62s**.
+최신 전체 회귀 결과: **685 passed in 29.62s**.
 
 ## 5. Before / After 비교
 
@@ -155,41 +156,63 @@ LLM_BACKEND=fake VLM_BACKEND=fake EMBED_BACKEND=fake \
 - 오류·누락·`ABSTAIN`을 정확도 분모에서 제외하지 않음
 - batch는 `auto_approve`이므로 사람 승인이 정확도를 높였다고 해석하지 않음
 
-### R6.5 dev 스냅샷 실측(현재 R6.6 성능이 아님)
+### R6.6 dev 정식 실측
 
-정식 run `20261022T002750112528Z-9befe77d286f`에서 R6.5 코드로 동일한 dev
-52장을 B0와 A에 각각 입력했다. 양쪽 모두 누락·오류·무효 판정 없이 완료했다.
+정식 run `20261022T112100000000Z-r66dev`에서 동일한 고정 dev
+52장을 B0와 A에 각각 입력했다. 양쪽 모두 누락·오류·무효 판정
+없이 완료했고, 실행 전 clean commit `6e0709e`에 결과를 결속했다.
 
 | 지표 | B0: 단독 VLM | A: 전체 Agent |
 |---|---:|---:|
 | 결과 / 전체 | 52 / 52 | 52 / 52 |
 | 오류 / 누락 / 무효 | 0 / 0 / 0 | 0 / 0 / 0 |
-| End-to-end Accuracy | 28.85% | 9.62% |
-| Balanced Accuracy | 26.79% | 10.42% |
-| `ABSTAIN` / Coverage | 29 / 44.23% | 42 / 19.23% |
-| 정상 정답 / 정상 24장 | 0 / 24 | 5 / 24 |
+| End-to-end Accuracy | 28.85% | 11.54% |
+| Balanced Accuracy | 26.79% | 12.50% |
+| `ABSTAIN` / Coverage | 29 / 44.23% | 41 / 21.15% |
+| 정상 정답 / 정상 24장 | 0 / 24 | 6 / 24 |
 | 결함 정답 / 결함 28장 | 15 / 28 | 0 / 28 |
-| Selective Accuracy | 65.22% | 50.00% |
+| Selective Accuracy | 65.22% | 54.55% |
 | 유형 Macro-F1 | 13.57% | 0.00% |
 | 인용 충실도 | 60.00% | 68.40% |
-| 지연 p50 / p95 | 4.269초 / 9.110초 | 65.405초 / 84.120초 |
-| 평균 계산 자원 proxy / 장 | 0.000573 | 0.022970(setup 상각 포함) |
+| 지연 p50 / p95 | 4.431초 / 9.505초 | 68.314초 / 83.178초 |
+| 평균 계산 자원 proxy / 장 | 0.000573 | 0.031484(setup 상각 포함) |
 
-A는 정상 5장을 PASS로 회복했지만 결함 28장을 하나도 맞히지 못했고, 42장을
-`ABSTAIN`으로 보냈다. Balanced Accuracy는 B0보다 16.37%p 낮았다
-(`Δ=-16.37%p`, 95% CI `[-28.0, -3.9]`%p, `p=0.040798`). 이는 dev 탐색 결과라
-held-out 가설 결론은 아니지만, **현재 3B 로컬 모델에서 전체 Agent의 성능 개선은
-입증되지 않았으며 오히려 악화됐다.** 엄격한 Cross 계약은 근거 부족을 확정 판정으로
-넘기지 않았지만, 관찰 품질 자체를 개선하지 못해 coverage와 결함 재현율이 무너졌다.
+A는 정상 6장을 PASS로 회복했지만 결함 28장을 하나도 맞히지 못했고,
+41장을 `ABSTAIN`으로 보냈다. Balanced Accuracy는 B0보다 14.29%p
+낮았다(`Δ=-14.29%p`, 95% CI `[-26.2, -1.2]`%p, `p=0.084896`).
+dev 탐색 결과이므로 held-out 가설 결론은 아니지만, **현재 3B 로컬
+모델에서 전체 Agent의 종단 성능 개선은 실패했다.** 정상 참조 입력을
+대칭으로 맞추고 Cross 계약을 강화한 보정은 정상 정답을 1장 늘렸지만,
+3B VLM의 결함 관찰 품질을 회복하지 못했다.
 
-R6.6에서는 Observer와 Cross-Checker에 같은 정상 참조를 제공하고 응답 계약을
-강화했지만, 아직 같은 고정 dev 전체를 다시 측정하지 않았다. 따라서 R6.5 스냅샷을
-R6.6 성능으로 해석하지 않으며, 재측정 결과가 나오기 전 현재 성능 판정은 **NO-GO**다.
-
-상세 지표·모델·무결성 정보는 [R6.5 dev 공개 요약](docs/results/r6_5_dev_summary.md)에
+상세 지표·모델·무결성 정보는 [R6.6 dev 공개 요약](docs/results/r6_6_dev_summary.md)에
 고정했다. 원시 JSONL은 이미지 경로를 포함하므로 Git에는 올리지 않는다.
 
-이전 R6 실행에서 저장된 A의 실제 RAG query만 다시 사용한 결함 28건 top-3 결과는
+### A+ 후보 — dev 사후 탐색
+
+같은 run의 저장된 B0/A 행을 이미지 재호출 없이 결합했다. 규칙은
+`B0=REJECT`면 REJECT, 그렇지 않고 `A=PASS`면 PASS, 나머지는
+ABSTAIN이다. 실행 중 정답 라벨을 쓰지 않는 결정론적 정책이지만,
+결과를 본 뒤 정한 **post-hoc dev 후보**이며 현재 A 그래프의 성과가 아니다.
+
+| 지표 | B0 | A | A+ 사후 결합·그래프 미통합 |
+|---|---:|---:|---:|
+| Accuracy | 28.85% | 11.54% | **38.46%** |
+| Balanced Accuracy | 26.79% | 12.50% | **37.20%** |
+| `ABSTAIN` / Coverage | 29 / 44.23% | 41 / 21.15% | 23 / 55.77% |
+| 정상 정답 / 24 | 0 | 6 | 5 |
+| 결함 정답 / 28 | 15 | 0 | 15 |
+| Selective Accuracy | 65.22% | 54.55% | 68.97% |
+
+A+는 B0 대비 Accuracy `+9.62%p`, Balanced Accuracy `+10.42%p`였지만
+짝지은 McNemar exact 검정은 `p=0.0625`로 유의하지 않았다. B0와 A를
+둘 다 실행해야 하며 결합 end-to-end 지연·자원은 아직 미측정이다. 또한
+B0가 보류한 실제 결함 1건을 A의 `PASS`로 바꾸는 미검
+위험도 확인됐다. held-out으로 재현하지 않았으므로 “정확도 개선 입증”이
+아니라 **다음 동결 후보**로만 보고한다.
+
+이전 R6 실행에서 저장된 A의 실제 RAG query만 다시 사용한 오프라인
+embedding 후보 비교에서 결함 28건 top-3 결과는
 `nomic-embed-text` 17/28(60.71%), `bge-m3` 23/28(82.14%)였다.
 같은 이전 R6 코드에서 고정 dev 20장을 3회 반복했을 때 verdict 변동은
 0/20이었지만, strict Cross 계약 보정 후 반복 측정값은 아니다. 낮은 정확도의
@@ -262,6 +285,7 @@ data/specs/            품목별 검사 기준서
 data/guides/           결함 유형별 조치 가이드
 eval/                  고정 데이터셋, 실행기, 지표, provenance
 tests/                 단위·통합·회귀 테스트
+tools/                 저장 결과의 비식별 사후 분석 도구
 docs/adr/              핵심 아키텍처 결정 기록
 sh/                    환경·데이터·서버·평가 실행 스크립트
 mcp_server_vision.py   VLM Tool·기준서/guide Resource·Prompt
@@ -273,6 +297,9 @@ web_demo_server.py     Vue 화면 프록시(:8600)
 - [아키텍처·시퀀스 다이어그램](docs/architecture.md)
 - [구현·검증 계획](docs/plan.md)
 - [트러블슈팅 기록](docs/troubleshooting.md)
+- [R6.6 dev 정식 결과 요약](docs/results/r6_6_dev_summary.md)
+- [A+ dev 사후 분석 보고서](docs/results/a_plus_dev_20261022T112100000000Z-r66dev.md)
+- [5분 발표 대본](docs/presentation.md)
 - [ADR: RAG 판정](docs/adr/0001-spec-judgement-via-rag.md)
 - [ADR: 코드 합의 규칙](docs/adr/0002-consensus-as-code-rule.md)
 - [ADR: HITL 위치](docs/adr/0003-hitl-between-write-and-validate.md)
@@ -284,7 +311,7 @@ web_demo_server.py     Vue 화면 프록시(:8600)
 - [x] 실제 프로젝트 화면 캡처 4장 추가
 - [x] 선택 보너스용 동일 입력 B0/A 비교 화면 추가
 - [x] GitHub 저장소 Public 및 링크 접속 확인
-- [ ] 최종 변경사항 커밋·푸시
+- [x] 최종 변경사항 커밋·푸시
 - [x] fake 전체 회귀 통과
 - [x] dev B0/A·RAG·일관성 결과와 한계 공개
 - [x] held-out 미열람 유지
